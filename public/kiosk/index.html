@@ -59,8 +59,8 @@
     <div id="phoneModal" class="modal hidden" role="dialog" aria-modal="true">
         <div class="modal-card">
             <h3 id="modalTitle">取號</h3>
-            <label>電話號碼</label>
-            <input id="phone" placeholder="0900-000-000" inputmode="numeric" />
+            <label>電話號碼（必填）</label>
+            <input id="phone" placeholder="0900-000-000" inputmode="numeric" required />
             <div class="actions">
                 <button id="cancelModal" class="btn">取消</button>
                 <button id="confirmModal" class="btn btn-primary">確定取號</button>
@@ -122,13 +122,15 @@
         });
 
         $('#cancelModal').onclick = () => $('#phoneModal').classList.add('hidden');
-        $('#phone').addEventListener('input', (e) => { e.target.value = onlyDigits(e.target.value).slice(0, 15); });
+    $('#phone').addEventListener('input', (e) => { e.target.value = onlyDigits(e.target.value).slice(0, 15); });
 
         // Confirm create ticket
         $('#confirmModal').onclick = async () => {
             const serviceType = $('#serviceType').value;
             const rawPhone = $('#phone').value;
             const phone = onlyDigits(rawPhone) || undefined;
+            // basic client-side validation: require phone digits and reasonable length
+            if (!phone || phone.length < 6) { alert('請輸入有效的電話號碼（至少 6 位數）'); return; }
             const res = await fetch('/api/tickets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ serviceType, phone }) });
             const { ticket, error } = await res.json();
             if (error) { alert(error); return; }

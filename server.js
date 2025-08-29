@@ -306,8 +306,10 @@ app.post('/api/tickets', (req, res) => {
     let { phone } = req.body || {};
     if (!serviceType) return res.status(400).json({ error: 'serviceType is required' });
     // normalize phone: keep digits only, treat empty as null
-    phone = phone ? String(phone).replace(/\D/g, '') : null;
-    if (phone === '') phone = null;
+  phone = phone ? String(phone).replace(/\D/g, '') : null;
+  if (phone === '') phone = null;
+  // phone is required
+  if (!phone) return res.status(400).json({ error: 'phone is required' });
     const createdAt = dayjs().toISOString();
     const number = getNextNumber(serviceType.toUpperCase());
     const info = db.prepare(`
@@ -470,8 +472,10 @@ app.post('/api/agent/createTicket', requirePin, (req, res) => {
     const { serviceType } = req.body || {};
     let { phone } = req.body || {};
     if (!serviceType) return res.status(400).json({ error: 'serviceType is required' });
-    phone = phone ? String(phone).replace(/\D/g, '') : null;
-    if (phone === '') phone = null;
+  phone = phone ? String(phone).replace(/\D/g, '') : null;
+  if (phone === '') phone = null;
+  // force phone required for counter-created tickets
+  if (!phone) return res.status(400).json({ error: 'phone is required' });
     const createdAt = dayjs().toISOString();
     const number = getNextNumber(serviceType.toUpperCase());
     const info = db.prepare(`
