@@ -1,0 +1,9 @@
+body,html{height:100%;margin:0}
+body{font-family:Segoe UI, Roboto, Arial;background:#0b1020;color:#e3e7f1}
+.screen{display:flex;flex-direction:column;height:100%}
+header,footer{padding:16px 24px;background:#101938}
+.calls{flex:1;display:grid;grid-template-columns:repeat(2,1fr);gap:16px;padding:24px}
+.row{background:#141c3a;border:1px solid #25305b;border-radius:12px;display:flex;align-items:center;justify-content:space-between;padding:16px 24px}
+.row.empty{justify-content:center}
+.num{font-size:56px;font-weight:700}
+.ctr{font-size:28px}
