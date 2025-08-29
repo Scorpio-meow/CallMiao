@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>大廳顯示</title>
+  <link rel="stylesheet" href="/lobby/style.css" />
+  <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+  <div class="screen">
+    <header>現在叫號</header>
+    <div id="calls" class="calls"></div>
+    <footer>請留意大螢幕與手機通知</footer>
+  </div>
+
+  <script>
+    const socket = io();
+    async function render(){
+      const res = await fetch('/api/overview');
+      const data = await res.json();
+      const calls = data.currentCalls||[];
+      const html = calls.slice(0,8).map(c=>`<div class="row"><div class="num">${c.number}</div><div class="ctr">櫃台 ${c.counter||'-'}</div></div>`).join('');
+      document.querySelector('#calls').innerHTML = html || '<div class="row empty">暫無叫號</div>';
+    }
+    function speak(text){
+      try {
+        const u = new SpeechSynthesisUtterance(text);
+        u.lang = 'zh-TW';
+        speechSynthesis.speak(u);
+      } catch(e) {}
+    }
+    socket.on('queue:update', render);
+    socket.on('call:made', (payload)=>{
+      render();
+      const t = payload?.ticket;
+      if(t){ speak(`請號碼 ${t.number} 到 ${t.counter||'服務櫃台'}`); }
+    });
+    render();
+  </script>
+</body>
+</html>

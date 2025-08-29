@@ -1,0 +1,16 @@
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans TC,Arial,sans-serif;background:radial-gradient(1200px 600px at 20% 10%, #e5e7eb 10%, #cbd5e1 60%, #94a3b8 100%)}
+.page{min-height:100%;display:flex;align-items:center;justify-content:center;padding:24px}
+.card{width:min(92vw,460px);background:rgba(255,255,255,.85);backdrop-filter:blur(6px);border-radius:16px;box-shadow:0 30px 80px rgba(0,0,0,.25);padding:22px 20px}
+.brand{display:flex;align-items:center;gap:12px}
+.logo{width:48px;height:48px;border-radius:12px;background:#cc0000;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:22px}
+.brand-text{font-size:22px;font-weight:800;color:#111}
+.subtitle{text-align:center;color:#b00020;font-size:18px;margin:10px 0 18px;font-weight:900}
+.form{display:flex;flex-direction:column;gap:8px}
+input{padding:10px 12px;border:1px solid #e5e7eb;border-radius:10px;font-size:16px;background:#fff}
+.captcha-row{display:flex;gap:8px;align-items:center}
+.captcha-img{min-width:120px;border:none;border-radius:10px;color:#fff;font-weight:800;padding:10px 12px;cursor:pointer}
+.hint{color:#6b7280;font-size:12px;margin-top:2px}
+.btn{border:none;border-radius:10px;padding:10px 12px;cursor:pointer}
+.btn-dark{background:#374151;color:#fff;margin-top:8px}
