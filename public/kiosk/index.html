@@ -7,6 +7,7 @@
     <title>取號機 Kiosk</title>
     <link rel="stylesheet" href="/kiosk/style.css" />
     <script src="/socket.io/socket.io.js"></script>
+    <script defer src="/kiosk/app.js"></script>
 </head>
 
 <body>
@@ -19,7 +20,7 @@
             <div class="title">取號機</div>
         </header>
 
-        <div class="notice">請輕觸螢幕按鍵取號，持號碼牌等候叫號，謝謝！</div>
+        <div class="notice">請輕觸螢幕按鈕取號，持號碼牌等待叫號，謝謝！</div>
 
         <main class="main-grid">
             <section class="service-area">
@@ -35,8 +36,8 @@
                         <span class="wait">等待人數：<b data-wait="B">0</b> 人</span>
                     </button>
                     <button class="card" data-service="C">
-                        <h3>保單借款服務</h3>
-                        <p>保險單借款</p>
+                        <h3>保單借據服務</h3>
+                        <p>保險單借據</p>
                         <span class="wait">等待人數：<b data-wait="C">0</b> 人</span>
                     </button>
                     <button class="card" data-service="D">
@@ -64,7 +65,7 @@
             <input id="phone" placeholder="0900-000-000" inputmode="numeric" required />
             <div class="actions">
                 <button id="cancelModal" class="btn">取消</button>
-                <button id="confirmModal" class="btn btn-primary">確定取號</button>
+                <button id="confirmModal" class="btn btn-primary">確認取號</button>
             </div>
         </div>
     </div>
@@ -76,7 +77,7 @@
                 <h2>已取號</h2>
                 <p>您的號碼：<strong id="number"></strong></p>
                 <img id="qrcode" alt="QR code" />
-                <p>票券連結：<a id="ticketLink" target="_blank"></a></p>
+                <p>票券連結：<a id="ticketLink" target="_blank" rel="noopener noreferrer"></a></p>
                 <p class="note">請攜帶此 QR 至櫃台出示；亦可隨時回到此連結查看進度。</p>
                 <div class="actions">
                     <button id="closeResult" class="btn btn-primary">關閉</button>
@@ -84,80 +85,6 @@
             </section>
         </div>
     </div>
-
-    <script>
-        const $ = (s) => document.querySelector(s);
-        const socket = io();
-        const SERVICE_NAMES = { A: '一般保險服務', B: '理賠送件服務', C: '保單借款服務', D: '繳費服務', E: '人生設計所保險諮詢' };
-
-        function onlyDigits(s) { return (s || '').replace(/\D/g, ''); }
-        function setActiveService(code) { document.querySelector('#serviceType').value = code; }
-
-        async function loadOverview() {
-            const res = await fetch('/api/overview');
-            const data = await res.json();
-            const sum = (data.summary || []).reduce((acc, s) => { acc[s.serviceType] = s; return acc; }, {});
-            // update card waits
-            ['A', 'B', 'C', 'D', 'E'].forEach(code => {
-                const el = document.querySelector(`[data-wait="${code}"]`);
-                if (el) el.textContent = sum[code]?.waiting || 0;
-            });
-            // summary chips with full names (guard if #summary not present)
-            const html = (data.summary || []).map(s =>
-                `<div class="chip">${SERVICE_NAMES[s.serviceType] || s.serviceType} 等候 ${s.waiting || 0}</div>`
-            ).join('');
-            const summaryEl = document.querySelector('#summary');
-            if (summaryEl) summaryEl.innerHTML = html;
-        }
-
-        // Service cards click -> open modal
-        let selectedService = 'A';
-        document.querySelectorAll('.card[data-service]').forEach(c => {
-            c.onclick = () => {
-                selectedService = c.getAttribute('data-service');
-                setActiveService(selectedService);
-                $('#modalTitle').textContent = `取號：${SERVICE_NAMES[selectedService] || selectedService}`;
-                $('#phone').value = '';
-                $('#phoneModal').classList.remove('hidden');
-            };
-        });
-
-        $('#cancelModal').onclick = () => $('#phoneModal').classList.add('hidden');
-    $('#phone').addEventListener('input', (e) => { e.target.value = onlyDigits(e.target.value).slice(0, 15); });
-
-        // Confirm create ticket
-        $('#confirmModal').onclick = async () => {
-            const serviceType = $('#serviceType').value;
-            const rawPhone = $('#phone').value;
-            const phone = onlyDigits(rawPhone) || undefined;
-            // basic client-side validation: require phone digits and reasonable length
-            if (!phone || phone.length < 6) { alert('請輸入有效的電話號碼（至少 6 位數）'); return; }
-            const res = await fetch('/api/tickets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ serviceType, phone }) });
-            const { ticket, error } = await res.json();
-            if (error) { alert(error); return; }
-            if (ticket) {
-                const ticketUrl = `${location.origin}/ticket/index.html?id=${ticket.id}`;
-                $('#number').textContent = ticket.number;
-                $('#ticketLink').textContent = ticketUrl;
-                $('#ticketLink').href = ticketUrl;
-                $('#qrcode').src = `/api/qrcode?text=${encodeURIComponent(ticketUrl)}`;
-                // 開啟結果彈窗
-                $('#phoneModal').classList.add('hidden');
-                $('#resultModal').classList.remove('hidden');
-                loadOverview();
-            }
-        };
-
-        // 關閉結果彈窗
-        document.addEventListener('click', (e) => {
-            if (e.target && e.target.id === 'closeResult') {
-                $('#resultModal').classList.add('hidden');
-            }
-        });
-
-        loadOverview();
-        socket.on('queue:update', loadOverview);
-    </script>
 </body>
 
 </html>

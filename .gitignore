@@ -11,3 +11,4 @@ logs/
 tmp/
 dist/
 coverage/
+package-lock.json

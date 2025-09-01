@@ -3,21 +3,25 @@ const fs = require('fs');
 const http = require('http');
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const cookieParser = require('cookie-parser');
+const jwt = require('jsonwebtoken');
 const dayjs = require('dayjs');
 const QRCode = require('qrcode');
 const Database = require('better-sqlite3');
 const bcrypt = require('bcryptjs');
 
 const PORT = process.env.PORT || 3000;
-// AGENT_PIN must be provided via environment variable for security
-const AGENT_PIN = process.env.AGENT_PIN;
-if (!AGENT_PIN) {
-  console.error('FATAL: AGENT_PIN environment variable is required. Example: setx AGENT_PIN "5151" (Windows) or export AGENT_PIN=5151');
-  process.exit(1);
-}
+
+// JWT secret for cookie-based auth (generate ephemeral for dev if missing)
+const JWT_SECRET = process.env.JWT_SECRET || require('crypto').randomBytes(32).toString('hex');
 
 // ALLOWED_ORIGINS: comma-separated list of allowed origins for CORS (defaults to localhost)
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS && process.env.ALLOWED_ORIGINS.split(',').map(s=>s.trim())) || ['http://localhost:3000'];
+if (ALLOWED_ORIGINS.includes('*')) {
+  console.warn('ALLOWED_ORIGINS should not contain * in production. Removing * for safety.');
+}
 
 // Ensure db folder exists
 const dbDir = path.join(__dirname, 'db');
@@ -83,6 +87,19 @@ CREATE TABLE IF NOT EXISTS agents (
   }
   throw err;
 }
+// Seed a default admin for development if table is empty
+try {
+  const row = db.prepare('SELECT COUNT(1) AS c FROM agents').get();
+  if ((row?.c || 0) === 0 && process.env.NODE_ENV !== 'production') {
+    const now = dayjs().toISOString();
+    const hash = bcrypt.hashSync('admin123', 10);
+    db.prepare('INSERT INTO agents(account,name,password,counter,role,active,createdAt) VALUES (?,?,?,?,?,?,?)')
+      .run('admin', 'Administrator', hash, null, 'admin', 1, now);
+    console.log('[INIT] Created default admin account: account=admin password=admin123 (dev only)');
+  }
+} catch (e) {
+  console.warn('Admin seed skipped:', e && e.message);
+}
 
 function getNextNumber(serviceType) {
   const ymd = dayjs().format('YYYYMMDD');
@@ -118,17 +135,30 @@ app.use(cors({ origin: function(origin, cb){
   if(ALLOWED_ORIGINS.indexOf(origin) !== -1) return cb(null, true);
   return cb(new Error('CORS origin denied'));
 }}));
+app.use(helmet({
+  contentSecurityPolicy: {
+    useDefaults: true,
+    directives: {
+      "default-src": ["'self'"],
+      "img-src": ["'self'", 'data:', 'blob:'],
+      "font-src": ["'self'", 'data:'],
+      "style-src": ["'self'"],
+      "script-src": ["'self'"],
+      "connect-src": ["'self'", 'ws:', 'wss:']
+    }
+  },
+  crossOriginEmbedderPolicy: false
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
 
-// Minimal CSP to allow our local app (scripts/styles inline for demo) and websockets
-app.use((req, res, next) => {
-  res.setHeader(
-    'Content-Security-Policy',
-    "default-src 'self'; img-src 'self' data: blob:; font-src 'self' data: https://r2cdn.perplexity.ai; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:"
-  );
-  next();
-});
+// Rate limiters for sensitive endpoints
+const limiterLogin = rateLimit({ windowMs: 10*60*1000, max: 20, standardHeaders: true, legacyHeaders: false });
+const limiterCaptcha = rateLimit({ windowMs: 10*60*1000, max: 60, standardHeaders: true, legacyHeaders: false });
+const limiterQr = rateLimit({ windowMs: 10*60*1000, max: 100, standardHeaders: true, legacyHeaders: false });
+const limiterAdmin = rateLimit({ windowMs: 10*60*1000, max: 200, standardHeaders: true, legacyHeaders: false });
+const limiterAgent = rateLimit({ windowMs: 10*60*1000, max: 400, standardHeaders: true, legacyHeaders: false });
 
 // --- simple in-memory captcha store { token: { code, expiresAt }} ---
 const captchaStore = {};
@@ -151,7 +181,7 @@ setInterval(()=>{
 }, 60*1000);
 
 // Get a new captcha token
-app.get('/api/captcha/new', (req, res) => {
+app.get('/api/captcha/new', limiterCaptcha, (req, res) => {
   const token = genToken();
   const expiresAt = Date.now() + (5*60*1000);
   // generate and store placeholder; image route will regenerate SVG/PNG fresh to avoid caching issues
@@ -162,7 +192,7 @@ app.get('/api/captcha/new', (req, res) => {
 });
 
 // Return PNG image for a given token
-app.get('/api/captcha/image/:token', async (req, res) => {
+app.get('/api/captcha/image/:token', limiterCaptcha, async (req, res) => {
   const { token } = req.params;
   const rec = captchaStore[token];
   if(!rec || rec.expiresAt < Date.now()) return res.status(404).send('invalid token');
@@ -188,7 +218,7 @@ app.get('/api/captcha/image/:token', async (req, res) => {
 });
 
 // Login endpoint: validate captcha token + code, then verify real agent credentials
-app.post('/api/login', (req, res) => {
+app.post('/api/login', limiterLogin, (req, res) => {
   const { account, password, captchaToken, captcha } = req.body || {};
   if(!captchaToken || !captcha) return res.status(400).json({ error: 'captcha required' });
   const rec = captchaStore[captchaToken];
@@ -203,11 +233,44 @@ app.post('/api/login', (req, res) => {
   if(!user) return res.status(401).json({ error: 'invalid credentials' });
   const ok = (user.password && password) ? bcrypt.compareSync(String(password), String(user.password)) : false;
   if(!ok) return res.status(401).json({ error: 'invalid credentials' });
-  return res.json({ ok: true, agent: { id: user.id, account: user.account, name: user.name, counter: user.counter } });
+  // issue JWT cookie (8h)
+  const token = jwt.sign({ sub: user.id, role: user.role || 'agent', account: user.account }, JWT_SECRET, { expiresIn: '8h' });
+  res.cookie('sid', token, { httpOnly: true, sameSite: 'strict', secure: process.env.NODE_ENV === 'production', maxAge: 8*60*60*1000, path: '/' });
+  return res.json({ ok: true, agent: { id: user.id, account: user.account, name: user.name, counter: user.counter, role: user.role || 'agent' } });
 });
 
-// Issue a CSRF token for admin UI; requires valid x-agent-pin header (requirePin middleware)
-app.post('/api/admin/csrf', requirePin, (req, res) => {
+// auth helpers
+function getIp(req){ return (req.headers['x-forwarded-for']?.split(',')[0]?.trim()) || req.socket.remoteAddress || ''; }
+function requireAuth(req, res, next){
+  try{
+    const token = req.cookies && req.cookies.sid;
+    if(!token) return res.status(401).json({ error: 'unauthorized' });
+    const payload = jwt.verify(token, JWT_SECRET);
+    req.user = { id: payload.sub, role: payload.role || 'agent', account: payload.account };
+    next();
+  }catch(e){ return res.status(401).json({ error: 'unauthorized' }); }
+}
+function requireRole(...roles){
+  return (req, res, next) => {
+    if(!req.user) return res.status(401).json({ error: 'unauthorized' });
+    if(!roles.includes(req.user.role)) return res.status(403).json({ error: 'forbidden' });
+    next();
+  };
+}
+function audit(action, details){
+  try{
+    const now = new Date().toISOString();
+    const info = { time: now, action, ip: details?.ip, user: details?.user, extra: details?.extra };
+    console.log('[AUDIT]', JSON.stringify(info));
+  }catch(e){ /* noop */ }
+}
+
+// session info & logout
+app.get('/api/auth/me', requireAuth, (req, res)=>{ res.json({ user: req.user }); });
+app.post('/api/auth/logout', requireAuth, (req, res)=>{ res.clearCookie('sid', { path: '/' }); res.json({ ok: true }); });
+
+// Issue a CSRF token for admin UI; requires an authenticated admin session
+app.post('/api/admin/csrf', requireAuth, requireRole('admin'), limiterAdmin, (req, res) => {
   try{
     const token = genCsrf();
     csrfStore[token] = { createdAt: Date.now() };
@@ -216,12 +279,12 @@ app.post('/api/admin/csrf', requirePin, (req, res) => {
 });
 
 // --- agents management API (simple CRUD) ---
-app.get('/api/agents', requirePin, (req, res) => {
+app.get('/api/agents', requireAuth, requireRole('admin'), limiterAdmin, (req, res) => {
   const rows = db.prepare('SELECT id, account, name, counter, role, active, createdAt, updatedAt FROM agents ORDER BY id DESC').all();
   res.json({ agents: rows });
 });
 
-app.post('/api/agents', requirePin, requireCsrf, (req, res) => {
+app.post('/api/agents', requireAuth, requireRole('admin'), limiterAdmin, requireCsrf, (req, res) => {
   const { account, name, password, counter, role } = req.body || {};
   if(!account || !password) return res.status(400).json({ error: 'account and password required' });
   const now = dayjs().toISOString();
@@ -229,6 +292,7 @@ app.post('/api/agents', requirePin, requireCsrf, (req, res) => {
   try{
     const info = db.prepare('INSERT INTO agents(account,name,password,counter,role,createdAt) VALUES (?,?,?,?,?,?)').run(account, name||null, hash, counter||null, role||null, now);
     const row = db.prepare('SELECT id, account, name, counter, role, active, createdAt, updatedAt FROM agents WHERE id=?').get(info.lastInsertRowid);
+    audit('admin:create_agent', { ip: getIp(req), user: req.user, extra: { account } });
     res.json({ agent: row });
   }catch(err){
     if(err && err.code === 'SQLITE_CONSTRAINT_UNIQUE') return res.status(400).json({ error: 'account exists' });
@@ -237,13 +301,13 @@ app.post('/api/agents', requirePin, requireCsrf, (req, res) => {
   }
 });
 
-app.get('/api/agents/:id', requirePin, (req, res) => {
+app.get('/api/agents/:id', requireAuth, requireRole('admin'), limiterAdmin, (req, res) => {
   const row = db.prepare('SELECT id, account, name, counter, role, active, createdAt, updatedAt FROM agents WHERE id=?').get(req.params.id);
   if(!row) return res.status(404).json({ error: 'not found' });
   res.json({ agent: row });
 });
 
-app.put('/api/agents/:id', requirePin, requireCsrf, (req, res) => {
+app.put('/api/agents/:id', requireAuth, requireRole('admin'), limiterAdmin, requireCsrf, (req, res) => {
   const id = req.params.id;
   const { name, password, counter, role, active } = req.body || {};
   const now = dayjs().toISOString();
@@ -253,12 +317,14 @@ app.put('/api/agents/:id', requirePin, requireCsrf, (req, res) => {
   db.prepare('UPDATE agents SET name=?, password=?, counter=?, role=?, active=?, updatedAt=? WHERE id=?')
     .run(name||existing.name, hash, counter||existing.counter, role||existing.role, (active===undefined?existing.active:active), now, id);
   const row = db.prepare('SELECT id, account, name, counter, role, active, createdAt, updatedAt FROM agents WHERE id=?').get(id);
+  audit('admin:update_agent', { ip: getIp(req), user: req.user, extra: { id } });
   res.json({ agent: row });
 });
 
-app.delete('/api/agents/:id', requirePin, requireCsrf, (req, res) => {
+app.delete('/api/agents/:id', requireAuth, requireRole('admin'), limiterAdmin, requireCsrf, (req, res) => {
   const id = req.params.id;
   db.prepare('DELETE FROM agents WHERE id=?').run(id);
+  audit('admin:delete_agent', { ip: getIp(req), user: req.user, extra: { id } });
   res.json({ ok: true });
 });
 
@@ -343,7 +409,7 @@ app.get('/api/ticket/:id', (req, res) => {
 });
 
 // Protected ticket detail for agents (includes phone)
-app.get('/api/agent/ticket/:id', requirePin, (req, res) => {
+app.get('/api/agent/ticket/:id', requireAuth, requireRole('agent','admin'), limiterAgent, (req, res) => {
   const { id } = req.params;
   const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(id);
   if (!row) return res.status(404).json({ error: 'not found' });
@@ -353,13 +419,6 @@ app.get('/api/agent/ticket/:id', requirePin, (req, res) => {
 app.get('/api/overview', (req, res) => {
   res.json(getOverview());
 });
-
-function requirePin(req, res, next) {
-  // Enforce header PIN only; remove name-based bypass
-  const pin = req.get('x-agent-pin');
-  if (!AGENT_PIN || pin !== AGENT_PIN) return res.status(401).json({ error: 'unauthorized' });
-  next();
-}
 
 function requireCsrf(req, res, next){
   // Only enforce CSRF for browser-originated requests (with Origin header matching ALLOWED_ORIGINS)
@@ -374,7 +433,7 @@ function requireCsrf(req, res, next){
   next();
 }
 
-app.post('/api/agent/callNext', requirePin, (req, res) => {
+app.post('/api/agent/callNext', requireAuth, requireRole('agent','admin'), limiterAgent, (req, res) => {
   const { serviceType, counter } = req.body || {};
   if (!serviceType) return res.status(400).json({ error: 'serviceType is required' });
   const ticket = db.prepare(`
@@ -388,12 +447,13 @@ app.post('/api/agent/callNext', requirePin, (req, res) => {
   db.prepare('UPDATE tickets SET status=?, calledAt=?, counter=? WHERE id=?')
     .run('called', calledAt, counter || null, ticket.id);
   const updated = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticket.id);
+  audit('agent:callNext', { ip: getIp(req), user: req.user, extra: { id: updated.id } });
   io.emit('call:made', { ticket: updated });
   emitQueueUpdate(serviceType.toUpperCase());
   res.json({ ticket: updated });
 });
 
-app.post('/api/agent/finish', requirePin, (req, res) => {
+app.post('/api/agent/finish', requireAuth, requireRole('agent','admin'), limiterAgent, (req, res) => {
   const { ticketId, result, verify4 } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: 'ticketId is required' });
   const finishedAt = dayjs().toISOString();
@@ -408,23 +468,25 @@ app.post('/api/agent/finish', requirePin, (req, res) => {
   db.prepare('UPDATE tickets SET status=?, finishedAt=?, result=? WHERE id=?')
     .run('finished', finishedAt, result || null, ticketId);
   const updated = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
+  audit('agent:finish', { ip: getIp(req), user: req.user, extra: { id: updated.id } });
   emitQueueUpdate(updated.serviceType);
   res.json({ ticket: updated });
 });
 
-app.post('/api/agent/markServing', requirePin, (req, res) => {
+app.post('/api/agent/markServing', requireAuth, requireRole('agent','admin'), limiterAgent, (req, res) => {
   const { ticketId } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: 'ticketId is required' });
   const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
   if (!row) return res.status(404).json({ error: 'not found' });
   db.prepare('UPDATE tickets SET status=? WHERE id=?').run('serving', ticketId);
   const updated = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
+  audit('agent:markServing', { ip: getIp(req), user: req.user, extra: { id: updated.id } });
   emitQueueUpdate(updated.serviceType);
   res.json({ ticket: updated });
 });
 
 // Recall: re-trigger call for an already called ticket (keep status 'called', update calledAt)
-app.post('/api/agent/recall', requirePin, (req, res) => {
+app.post('/api/agent/recall', requireAuth, requireRole('agent','admin'), limiterAgent, (req, res) => {
   const { ticketId } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: 'ticketId is required' });
   const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
@@ -433,13 +495,14 @@ app.post('/api/agent/recall', requirePin, (req, res) => {
   const calledAt = dayjs().toISOString();
   db.prepare('UPDATE tickets SET calledAt=? WHERE id=?').run(calledAt, ticketId);
   const updated = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
+  audit('agent:recall', { ip: getIp(req), user: req.user, extra: { id: updated.id } });
   io.emit('call:made', { ticket: updated });
   emitQueueUpdate(updated.serviceType);
   res.json({ ticket: updated });
 });
 
 // Cancel: mark a ticket as canceled
-app.post('/api/agent/cancel', requirePin, (req, res) => {
+app.post('/api/agent/cancel', requireAuth, requireRole('agent','admin'), limiterAgent, (req, res) => {
   const { ticketId, reason } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: 'ticketId is required' });
   const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
@@ -448,12 +511,13 @@ app.post('/api/agent/cancel', requirePin, (req, res) => {
   db.prepare('UPDATE tickets SET status=?, finishedAt=?, result=? WHERE id=?')
     .run('canceled', finishedAt, reason || null, ticketId);
   const updated = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
+  audit('agent:cancel', { ip: getIp(req), user: req.user, extra: { id: updated.id } });
   emitQueueUpdate(updated.serviceType);
   res.json({ ticket: updated });
 });
 
 // Transfer: change serviceType and/or counter; reset to waiting by default
-app.post('/api/agent/transfer', requirePin, (req, res) => {
+app.post('/api/agent/transfer', requireAuth, requireRole('agent','admin'), limiterAgent, (req, res) => {
   const { ticketId, toServiceType, toCounter, keepStatus } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: 'ticketId is required' });
   const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
@@ -465,12 +529,13 @@ app.post('/api/agent/transfer', requirePin, (req, res) => {
   db.prepare('UPDATE tickets SET serviceType=?, counter=?, status=?, calledAt=? WHERE id=?')
     .run(targetType, counter, status, calledAt, ticketId);
   const updated = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
+  audit('agent:transfer', { ip: getIp(req), user: req.user, extra: { id: updated.id } });
   emitQueueUpdate(updated.serviceType);
   res.json({ ticket: updated });
 });
 
 // Agent creates a new ticket (counter-created)
-app.post('/api/agent/createTicket', requirePin, (req, res) => {
+app.post('/api/agent/createTicket', requireAuth, requireRole('agent','admin'), limiterAgent, (req, res) => {
   try {
     const { serviceType } = req.body || {};
     let { phone } = req.body || {};
@@ -486,7 +551,8 @@ app.post('/api/agent/createTicket', requirePin, (req, res) => {
       VALUES (?, ?, ?, 'waiting', ?)
     `).run(serviceType.toUpperCase(), number, phone || null, createdAt);
     const ticket = db.prepare('SELECT * FROM tickets WHERE id=?').get(info.lastInsertRowid);
-    emitQueueUpdate(serviceType.toUpperCase());
+  audit('agent:createTicket', { ip: getIp(req), user: req.user, extra: { id: ticket.id } });
+  emitQueueUpdate(serviceType.toUpperCase());
     res.json({ ticket });
   } catch (err) {
     console.error('agent create ticket error', err && err.stack || err);
@@ -495,7 +561,7 @@ app.post('/api/agent/createTicket', requirePin, (req, res) => {
 });
 
 // Call a specific ticket by id
-app.post('/api/agent/callSpecific', requirePin, (req, res) => {
+app.post('/api/agent/callSpecific', requireAuth, requireRole('agent','admin'), limiterAgent, (req, res) => {
   const { ticketId, counter, internal } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: 'ticketId is required' });
   const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
@@ -504,13 +570,14 @@ app.post('/api/agent/callSpecific', requirePin, (req, res) => {
   db.prepare('UPDATE tickets SET status=?, calledAt=?, counter=? WHERE id=?')
     .run('called', calledAt, counter || null, ticketId);
   const updated = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
+  audit('agent:callSpecific', { ip: getIp(req), user: req.user, extra: { id: updated.id } });
   if (!internal) io.emit('call:made', { ticket: updated });
   emitQueueUpdate(updated.serviceType);
   res.json({ ticket: updated });
 });
 
 // History of served/canceled tickets
-app.get('/api/agent/history', requirePin, (req, res) => {
+app.get('/api/agent/history', requireAuth, requireRole('agent','admin'), limiterAgent, (req, res) => {
   const limit = Math.min(parseInt(req.query.limit || '100', 10), 500);
   const serviceType = req.query.serviceType ? String(req.query.serviceType).toUpperCase() : null;
   const rows = db.prepare(`
@@ -524,15 +591,16 @@ app.get('/api/agent/history', requirePin, (req, res) => {
 });
 
 // Agent messaging (broadcast to agents)
-app.post('/api/agent/message', requirePin, (req, res) => {
+app.post('/api/agent/message', requireAuth, requireRole('agent','admin'), limiterAgent, (req, res) => {
   const { text, from } = req.body || {};
   if (!text) return res.status(400).json({ error: 'text is required' });
   const payload = { text, from: from || 'agent', time: new Date().toISOString() };
   io.emit('agent:message', payload);
+  audit('agent:message', { ip: getIp(req), user: req.user, extra: {} });
   res.json({ ok: true });
 });
 
-app.get('/api/qrcode', async (req, res) => {
+app.get('/api/qrcode', limiterQr, async (req, res) => {
   try {
     const text = req.query.text;
     if (!text) return res.status(400).send('text is required');
