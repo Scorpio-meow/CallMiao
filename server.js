@@ -187,7 +187,7 @@ app.get('/api/captcha/image/:token', async (req, res) => {
   }
 });
 
-// Login endpoint for demo: validate captcha token + code, then accept any account/pwd
+// Login endpoint: validate captcha token + code, then verify real agent credentials
 app.post('/api/login', (req, res) => {
   const { account, password, captchaToken, captcha } = req.body || {};
   if(!captchaToken || !captcha) return res.status(400).json({ error: 'captcha required' });
@@ -197,17 +197,13 @@ app.post('/api/login', (req, res) => {
   if(String(rec.code).toLowerCase() !== String(captcha).toLowerCase()) return res.status(400).json({ error: 'captcha mismatch' });
   // consume
   delete captchaStore[captchaToken];
-  // If account exists in agents table, verify password; otherwise accept as demo
-  if(account){
-    const user = db.prepare('SELECT * FROM agents WHERE account=?').get(account);
-    if(user){
-      const ok = (user.password && password) ? bcrypt.compareSync(String(password), String(user.password)) : false;
-      if(!ok) return res.status(401).json({ error: 'invalid credentials' });
-      return res.json({ ok: true, agent: { id: user.id, account: user.account, name: user.name, counter: user.counter } });
-    }
-  }
-  // fallback demo behavior
-  res.json({ ok: true });
+  // Verify credentials strictly
+  if(!account) return res.status(401).json({ error: 'invalid credentials' });
+  const user = db.prepare('SELECT * FROM agents WHERE account=?').get(account);
+  if(!user) return res.status(401).json({ error: 'invalid credentials' });
+  const ok = (user.password && password) ? bcrypt.compareSync(String(password), String(user.password)) : false;
+  if(!ok) return res.status(401).json({ error: 'invalid credentials' });
+  return res.json({ ok: true, agent: { id: user.id, account: user.account, name: user.name, counter: user.counter } });
 });
 
 // Issue a CSRF token for admin UI; requires valid x-agent-pin header (requirePin middleware)
@@ -220,7 +216,7 @@ app.post('/api/admin/csrf', requirePin, (req, res) => {
 });
 
 // --- agents management API (simple CRUD) ---
-app.get('/api/agents', (req, res) => {
+app.get('/api/agents', requirePin, (req, res) => {
   const rows = db.prepare('SELECT id, account, name, counter, role, active, createdAt, updatedAt FROM agents ORDER BY id DESC').all();
   res.json({ agents: rows });
 });
@@ -286,7 +282,7 @@ function getOverview() {
     GROUP BY serviceType
   `).all();
   const currentCalls = db.prepare(`
-    SELECT id, serviceType, number, counter, calledAt, phone
+    SELECT id, serviceType, number, counter, calledAt
     FROM tickets
     WHERE status IN ('called','serving')
     ORDER BY calledAt DESC
@@ -328,7 +324,8 @@ app.post('/api/tickets', (req, res) => {
 app.get('/api/tickets/waiting', (req, res) => {
   const { serviceType } = req.query;
   const rows = db.prepare(`
-    SELECT * FROM tickets
+    SELECT id, serviceType, number, status, createdAt
+    FROM tickets
     WHERE status='waiting'
       ${serviceType ? 'AND serviceType=?' : ''}
     ORDER BY createdAt ASC
@@ -336,7 +333,17 @@ app.get('/api/tickets/waiting', (req, res) => {
   res.json({ tickets: rows });
 });
 
+// Public ticket detail (sanitized)
 app.get('/api/ticket/:id', (req, res) => {
+  const { id } = req.params;
+  const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const { phone, ...rest } = row;
+  res.json({ ticket: rest });
+});
+
+// Protected ticket detail for agents (includes phone)
+app.get('/api/agent/ticket/:id', requirePin, (req, res) => {
   const { id } = req.params;
   const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(id);
   if (!row) return res.status(404).json({ error: 'not found' });
@@ -348,13 +355,9 @@ app.get('/api/overview', (req, res) => {
 });
 
 function requirePin(req, res, next) {
-  const pin = req.headers['x-agent-pin'] || req.body?.pin || req.query?.pin;
-  let agentNameHeader = req.headers['x-agent-name'];
-  if(agentNameHeader){
-    try{ agentNameHeader = decodeURIComponent(agentNameHeader); }catch(e){ /* ignore decode errors */ }
-  }
-  // Allow if correct pin OR if an agent name header is present (demo login via /login)
-  if (AGENT_PIN && pin !== AGENT_PIN && !agentNameHeader) return res.status(401).json({ error: 'unauthorized' });
+  // Enforce header PIN only; remove name-based bypass
+  const pin = req.get('x-agent-pin');
+  if (!AGENT_PIN || pin !== AGENT_PIN) return res.status(401).json({ error: 'unauthorized' });
   next();
 }
 

@@ -59,6 +59,12 @@ button{padding:8px 12px;border-radius:8px}
 .category-row .count{min-width:28px;height:28px;border-radius:8px;background:#ef4444;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800}
 .category-row .label{font-weight:600}
 
+/* selection / hover effects */
+.category-row{transition:all .14s ease;border-color:rgba(186,230,253,1);}
+.category-row:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(15,23,42,0.06);}
+.category-row.active{background:linear-gradient(90deg,#e6f4ff,#f8fcff);border-color:#2563eb;box-shadow:0 8px 24px rgba(37,99,235,0.08);}
+.category-row.active .count{background:#2563eb}
+
 .hidden{display:none}
 
 /* toaster / toast */
