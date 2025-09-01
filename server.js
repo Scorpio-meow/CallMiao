@@ -19,6 +19,9 @@ if (!AGENT_PIN) {
 
 // ALLOWED_ORIGINS: comma-separated list of allowed origins for CORS (defaults to localhost)
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS && process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()).filter(Boolean)) || ['http://localhost:3000'];
+// PUBLIC_ORIGIN: optional explicit public origin (e.g. https://example.com) used when building
+// public links (QR codes). If not set the server will try to infer from incoming requests.
+const PUBLIC_ORIGIN = process.env.PUBLIC_ORIGIN || null;
 
 // Ensure db folder exists
 const dbDir = path.join(__dirname, 'db');
@@ -333,6 +336,25 @@ function getOverview() {
 // API routes
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, time: new Date().toISOString() });
+});
+
+// Return runtime config useful for clients that need to generate public links (QR)
+function inferPublicOrigin(req) {
+  if (PUBLIC_ORIGIN) return PUBLIC_ORIGIN;
+  // respect X-Forwarded-Proto when behind reverse proxies (nginx, cloudflare, tunnels)
+  const forwardedProto = (req.get('x-forwarded-proto') || '').split(',')[0];
+  const proto = forwardedProto || req.protocol || 'http';
+  const host = req.get('host') || `localhost:${PORT}`;
+  return `${proto}://${host}`;
+}
+
+app.get('/api/config', (req, res) => {
+  try {
+    const publicOrigin = inferPublicOrigin(req);
+    res.json({ publicOrigin });
+  } catch (err) {
+    res.status(500).json({ error: 'config error' });
+  }
 });
 
 app.post('/api/tickets', (req, res) => {

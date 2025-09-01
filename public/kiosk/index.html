@@ -135,7 +135,17 @@
             const { ticket, error } = await res.json();
             if (error) { alert(error); return; }
             if (ticket) {
-                const ticketUrl = `${location.origin}/ticket/index.html?id=${ticket.id}`;
+                // try to get public origin from server (useful when server is behind a proxy or tunnel)
+                let publicOrigin = null;
+                try {
+                    const cfgRes = await fetch('/api/config');
+                    if (cfgRes.ok) {
+                        const cfg = await cfgRes.json();
+                        publicOrigin = cfg.publicOrigin || null;
+                    }
+                } catch (e) { /* ignore */ }
+                const base = publicOrigin || location.origin;
+                const ticketUrl = `${base}/ticket/index.html?id=${ticket.id}`;
                 $('#number').textContent = ticket.number;
                 $('#ticketLink').textContent = ticketUrl;
                 $('#ticketLink').href = ticketUrl;
