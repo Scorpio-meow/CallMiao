@@ -237,7 +237,7 @@ app.post('/api/agents', requirePin, requireCsrf, (req, res) => {
   }
 });
 
-app.get('/api/agents/:id', (req, res) => {
+app.get('/api/agents/:id', requirePin, (req, res) => {
   const row = db.prepare('SELECT id, account, name, counter, role, active, createdAt, updatedAt FROM agents WHERE id=?').get(req.params.id);
   if(!row) return res.status(404).json({ error: 'not found' });
   res.json({ agent: row });
