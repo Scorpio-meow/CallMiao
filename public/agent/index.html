@@ -184,7 +184,7 @@
 
     <script>
         const $ = (s) => document.querySelector(s);
-        const socket = io();
+    const socket = io();
         // 狀態中文對照
         const STATUS_LABEL = {
             waiting: '等候',
@@ -453,13 +453,27 @@
 
         socket.on('queue:update', refresh);
         socket.on('call:made', refresh);
+        // Join rooms for targeted messaging once connected
+        socket.on('connect', () => {
+            try {
+                const ctr = sessionStorage.getItem('agent_counter') || '';
+                if (ctr) socket.emit('join', `counter:${ctr}`);
+                if (agentName) socket.emit('join', `agent:${agentName}`);
+            } catch (e) { /* noop */ }
+        });
+
         // 接收密傳訊息廣播：其他櫃員或系統訊息
         socket.on('agent:message', (payload) => {
             try {
-                const { text, from } = payload || {};
+                const { text, from, toCounter, toAgent } = payload || {};
                 if (!text) return;
                 // 若為自己剛發送的訊息，避免重複顯示（已顯示「已送出訊息」）
                 if (from && agentName && String(from) === String(agentName)) return;
+                // If message has a target and doesn't match this client, ignore
+                const myCounter = sessionStorage.getItem('agent_counter') || '';
+                if (toCounter && String(toCounter) !== String(myCounter)) return;
+                if (toAgent && agentName && String(toAgent) !== String(agentName)) return;
+                // Otherwise show
                 toast(`【訊息】${from || '系統'}：${text}`, 'info');
             } catch (e) { /* noop */ }
         });
@@ -632,15 +646,31 @@
 
         // 密傳訊息：發送給所有櫃員端（簡易廣播）
         $('#message').onclick = async () => {
-            const text = prompt('輸入要廣播的訊息');
+                const text = prompt('輸入要傳送的訊息');
             if (!text) return;
-            const res = await apiFetch('/api/agent/message', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text, from: agentName || 'agent' })
-            });
-            const data = await res.json();
-            if (!res.ok || data.error) { alert(data.error || '傳送失敗'); return; }
-            toast('已送出訊息', 'success');
+                // Ask for optional target: counter or agent name
+                const targetType = prompt('指定傳送對象類型：輸入 C 表示櫃台，A 表示人員，留空表示廣播');
+                let toCounter = null;
+                let toAgent = null;
+                if (targetType && (targetType === 'C' || targetType === 'c')) {
+                    const ctr = prompt('輸入目標櫃台號（例如：1 或 A1）');
+                    if (!ctr) { alert('未輸入櫃台，取消'); return; }
+                    toCounter = ctr;
+                } else if (targetType && (targetType === 'A' || targetType === 'a')) {
+                    const ag = prompt('輸入目標服務人員姓名（完全匹配）');
+                    if (!ag) { alert('未輸入姓名，取消'); return; }
+                    toAgent = ag;
+                }
+                const body = { text, from: agentName || 'agent' };
+                if (toCounter) body.toCounter = toCounter;
+                if (toAgent) body.toAgent = toAgent;
+                const res = await apiFetch('/api/agent/message', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const data = await res.json();
+                if (!res.ok || data.error) { alert(data.error || '傳送失敗'); return; }
+                toast('已送出訊息', 'success');
         };
 
         // phone modal helpers
@@ -676,12 +706,19 @@
         // open second screen
         document.querySelector('#openSecondScreen').onclick = () => { window.open('/lobby/index.html', '_blank'); };
 
-        // persist counter change
+        // persist counter change and update socket rooms
         const counterEl = document.querySelector('#counter');
         if (counterEl) {
-            counterEl.addEventListener('change', () => {
-                const v = counterEl.value.trim();
+            counterEl.addEventListener('change', (ev) => {
+                const v = (ev.target && ev.target.value) ? String(ev.target.value).trim() : '';
+                const old = sessionStorage.getItem('agent_counter') || '';
                 sessionStorage.setItem('agent_counter', v);
+                try {
+                    if (socket && socket.connected) {
+                        if (old) socket.emit('leave', `counter:${old}`);
+                        if (v) socket.emit('join', `counter:${v}`);
+                    }
+                } catch (e) { /* noop */ }
             });
         }
 

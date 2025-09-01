@@ -571,11 +571,27 @@ app.get('/api/agent/history', requirePin, (req, res) => {
 
 // Agent messaging (broadcast to agents)
 app.post('/api/agent/message', requirePin, (req, res) => {
-  const { text, from } = req.body || {};
+  const { text, from, toCounter, toAgent } = req.body || {};
   if (!text) return res.status(400).json({ error: 'text is required' });
-  const payload = { text, from: from || 'agent', time: new Date().toISOString() };
-  io.emit('agent:message', payload);
-  res.json({ ok: true });
+  const payload = { text, from: from || 'agent', toCounter: toCounter || null, toAgent: toAgent || null, time: new Date().toISOString() };
+  try {
+    // If a specific counter is targeted, emit only to that counter room
+    if (toCounter) {
+      io.to(`counter:${String(toCounter)}`).emit('agent:message', payload);
+      return res.json({ ok: true, targeted: 'counter', toCounter });
+    }
+    // If a specific agent name is targeted, emit only to that agent room
+    if (toAgent) {
+      io.to(`agent:${String(toAgent)}`).emit('agent:message', payload);
+      return res.json({ ok: true, targeted: 'agent', toAgent });
+    }
+    // Otherwise broadcast to all agents
+    io.emit('agent:message', payload);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('agent message error', err);
+    res.status(500).json({ error: 'message send failed' });
+  }
 });
 
 app.get('/api/qrcode', qrcodeLimiter, async (req, res) => {
@@ -592,6 +608,9 @@ app.get('/api/qrcode', qrcodeLimiter, async (req, res) => {
 
 io.on('connection', (socket) => {
   socket.on('join', (room) => socket.join(room));
+  socket.on('leave', (room) => {
+    try { socket.leave(room); } catch (e) { /* noop */ }
+  });
 });
 
 server.listen(PORT, () => {
