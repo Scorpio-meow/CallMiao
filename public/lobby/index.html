@@ -1,5 +1,6 @@
 <!doctype html>
 <html lang="zh-Hant">
+
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -7,6 +8,7 @@
   <link rel="stylesheet" href="/lobby/style.css" />
   <script src="/socket.io/socket.io.js"></script>
 </head>
+
 <body>
   <div class="screen">
     <header>現在叫號</header>
@@ -17,15 +19,15 @@
 
   <script>
     const socket = io();
-  let audioEnabled = false;
-    async function render(){
+    let audioEnabled = false;
+    async function render() {
       const res = await fetch('/api/overview');
       const data = await res.json();
-      const calls = data.currentCalls||[];
-      const html = calls.slice(0,8).map(c=>`<div class="row"><div class="num">${c.number}</div><div class="ctr">櫃台 ${c.counter||'-'}</div></div>`).join('');
+      const calls = data.currentCalls || [];
+      const html = calls.slice(0, 8).map(c => `<div class="row"><div class="num">${c.number}</div><div class="ctr">櫃台 ${c.counter || '-'}</div></div>`).join('');
       document.querySelector('#calls').innerHTML = html || '<div class="row empty">暫無叫號</div>';
     }
-    function speak(text){
+    function speak(text) {
       try {
         if (!('speechSynthesis' in window)) {
           console.warn('speechSynthesis not supported in this browser');
@@ -38,10 +40,50 @@
         const u = new SpeechSynthesisUtterance(text);
         u.lang = 'zh-TW';
         speechSynthesis.speak(u);
-      } catch(e) { console.error('speak error', e); }
+      } catch (e) { console.error('speak error', e); }
     }
 
-    function enableAudio(){
+    // Voice selection and speak multiple parts in sequence.
+    let selectedVoice = null;
+    function chooseVoice() {
+      try {
+        const voices = speechSynthesis.getVoices() || [];
+        console.info('available voices', voices.map(v => ({ name: v.name, lang: v.lang })));
+        // prefer Chinese voice
+        selectedVoice = voices.find(v => v.lang && v.lang.toLowerCase().startsWith('zh')) || voices[0] || null;
+        if (selectedVoice) console.info('selected voice', { name: selectedVoice.name, lang: selectedVoice.lang });
+      } catch (e) { console.warn('chooseVoice failed', e); }
+    }
+    if ('speechSynthesis' in window) {
+      chooseVoice();
+      speechSynthesis.onvoiceschanged = chooseVoice;
+    }
+
+    // Speak multiple parts. Each part may be a string or an object { text, volume, rate, pitch }
+    function speakParts(parts) {
+      try {
+        if (!('speechSynthesis' in window)) return;
+        if (!audioEnabled) console.warn('audio not enabled yet; speak may be blocked');
+        let i = 0;
+        function next() {
+          if (i >= parts.length) return;
+          const part = parts[i];
+          const text = (typeof part === 'string') ? part : (part && part.text) || '';
+          const opts = (typeof part === 'object') ? part : {};
+          const u = new SpeechSynthesisUtterance(text);
+          u.lang = 'zh-TW';
+          if (selectedVoice) u.voice = selectedVoice;
+          if (opts.volume !== undefined) u.volume = opts.volume; // 0.0 - 1.0
+          if (opts.rate !== undefined) u.rate = opts.rate; // default ~1
+          if (opts.pitch !== undefined) u.pitch = opts.pitch; // default ~1
+          u.onend = () => { i++; setTimeout(next, opts.pauseAfter || 80); };
+          speechSynthesis.speak(u);
+        }
+        next();
+      } catch (err) { console.error('speakParts error', err); }
+    }
+
+    function enableAudio() {
       // Called by a user gesture to unlock audio autoplay policy in browsers
       try {
         if ('speechSynthesis' in window) {
@@ -66,7 +108,7 @@
         g.gain.value = 0; // silent
         o.connect(g); g.connect(ctx.destination);
         o.start();
-        setTimeout(() => { try { o.stop(); ctx.close(); } catch(e){} }, 100);
+        setTimeout(() => { try { o.stop(); ctx.close(); } catch (e) { } }, 100);
         audioEnabled = true;
         const btn = document.getElementById('enableSoundBtn');
         if (btn) btn.style.display = 'none';
@@ -76,15 +118,27 @@
       }
     }
     socket.on('queue:update', render);
-    socket.on('call:made', (payload)=>{
+    socket.on('call:made', (payload) => {
       render();
       const t = payload?.ticket;
-      if(t){ speak(`請號碼 ${t.number} 到 ${t.counter} 號櫃台`); }
+      if (t) {
+        // fallback for counter and chain parts to ensure complete speech
+        const counter = t.counter || '服務櫃台';
+        console.info('call:made payload', { number: t.number, counter });
+        // emphasize number by speaking it twice (slightly different pitch/rate) to increase perceived loudness
+        speakParts([
+          { text: '請號碼', volume: 0.95, rate: 0.90, pitch: 1.05, pauseAfter: 160 },
+          { text: String(t.number), volume: 10.0, rate: 0.80, pitch: 1.2, pauseAfter: 200 },
+          { text: String(t.number), volume: 10.0, rate: 0.87, pitch: 1.1, pauseAfter: 220 },
+          { text: `到 ${counter} 號櫃台`, volume: 0.9, rate: 0.90, pitch: 1.0, pauseAfter: 140 }
+        ]);
+
+      }
     });
     render();
 
     // attach enable button
-    document.addEventListener('DOMContentLoaded', ()=>{
+    document.addEventListener('DOMContentLoaded', () => {
       const btn = document.getElementById('enableSoundBtn');
       if (btn) btn.addEventListener('click', enableAudio);
       // If speechSynthesis is not available, hide the button
@@ -94,4 +148,5 @@
     });
   </script>
 </body>
+
 </html>
