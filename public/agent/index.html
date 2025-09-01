@@ -257,7 +257,7 @@
             const res = await fetch(url, opts);
             if (res.status === 401) {
                 // ask once for PIN then retry
-                const newPin = prompt('請輸入管理 PIN 以使用櫃員功能（例如 0000）');
+                const newPin = prompt('請輸入管理 PIN 以使用櫃員功能');
                 if (newPin) sessionStorage.setItem('admin_pin', newPin);
                 opts.headers['x-agent-pin'] = newPin || '';
                 return fetch(url, opts);

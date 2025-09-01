@@ -12,7 +12,7 @@ const PORT = process.env.PORT || 3000;
 // AGENT_PIN must be provided via environment variable for security
 const AGENT_PIN = process.env.AGENT_PIN;
 if (!AGENT_PIN) {
-  console.error('FATAL: AGENT_PIN environment variable is required. Example: setx AGENT_PIN "0000" (Windows) or export AGENT_PIN=0000');
+  console.error('嚴重錯誤：需要 AGENT_PIN 環境變數。');
   process.exit(1);
 }
 
