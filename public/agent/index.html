@@ -27,7 +27,100 @@
                     <button class="tab" disabled>重新評鑑</button>
                 </div>
                 <!-- auth controls (PIN removed) -->
-                
+                <div class="auth-status"><span id="authStatus"></span></div>
+            </div>
+        </div>
+
+        <!-- Controls Bar -->
+        <div class="controls">
+            <label>服務類別
+                <select id="serviceType">
+                    <option value="A" selected>A</option>
+                    <option value="B">B</option>
+                    <option value="C">C</option>
+                    <option value="D">D</option>
+                    <option value="E">E</option>
+                </select>
+            </label>
+            <label>櫃台
+                <input id="counter" type="text" placeholder="1" />
+            </label>
+            <div class="metrics">
+                <span>本類等待：<strong id="localWaitCount">0</strong></span>
+                <span>全部等待：<strong id="totalWaitCount">0</strong></span>
+                <span>時間：<strong id="clock">--:--:--</strong></span>
+            </div>
+        </div>
+
+        <!-- Content Grid -->
+        <div class="grid">
+            <div class="panel">
+                <h2>分類</h2>
+                <div id="categoryList"></div>
+            </div>
+
+            <div class="panel">
+                <h2>等待清單</h2>
+                <table class="table">
+                    <thead>
+                        <tr><th>號碼</th><th>取號時間</th><th>電話</th></tr>
+                    </thead>
+                    <tbody id="waiting"></tbody>
+                </table>
+            </div>
+
+            <div class="panel">
+                <h2>目前服務</h2>
+                <table class="table">
+                    <thead>
+                        <tr><th>號碼</th><th>櫃台</th><th>叫號時間</th><th></th></tr>
+                    </thead>
+                    <tbody id="current"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Selection & Actions -->
+        <div class="panel">
+            <div id="selectedInfo" class="muted"></div>
+            <input id="ticketId" type="text" placeholder="號碼" readonly />
+            <input id="ticketInternalId" type="hidden" />
+            <div class="fields">
+                <label>目前叫號：<input id="currentCallField" type="text" readonly /></label>
+                <label>等待時間：<input id="waitTimeField" type="text" readonly /></label>
+                <label>服務時間：<input id="serviceTimeField" type="text" readonly /></label>
+            </div>
+            <div class="actions">
+                <button id="callNext" class="btn">叫下一位</button>
+                <button id="markServing" class="btn">開始服務</button>
+                <button id="finish" class="btn">完成</button>
+                <button id="recall" class="btn">重叫</button>
+                <button id="cancel" class="btn">取消</button>
+                <button id="transfer" class="btn">轉櫃/轉服務</button>
+                <button id="createTicket" class="btn">建立票券</button>
+                <button id="pickup" class="btn">補取號</button>
+                <button id="pause" class="btn">暫停</button>
+                <button id="internalCall" class="btn">內部叫號</button>
+                <button id="history" class="btn">歷史</button>
+                <button id="logoutBtn" class="btn btn-light">登出</button>
+            </div>
+        </div>
+
+        <div id="toaster" class="toaster"></div>
+
+        <!-- History Modal -->
+        <div id="historyModal" class="modal hidden" aria-hidden="true" role="dialog">
+            <div class="modal-card">
+                <div class="modal-header">
+                    <h3>歷史紀錄</h3>
+                    <button id="historyClose" class="btn btn-light">關閉</button>
+                </div>
+                <div id="historyBody" class="modal-body"></div>
+            </div>
+        </div>
+
+    </div>
+
     <script src="/agent/app.js"></script>
 </body>
 

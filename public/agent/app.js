@@ -129,7 +129,8 @@ function renderCategoryList(summary) {
 async function refresh() {
   const res = await apiFetch('/api/overview');
   const data = await res.json().catch(() => ({}));
-  const serviceType = $('#serviceType').value;
+  const svcEl = $('#serviceType');
+  const serviceType = (svcEl && svcEl.value) ? svcEl.value : 'A';
 
   const waitingRes = await apiFetch(`/api/tickets/waiting?serviceType=${serviceType}`);
   const waitingData = await waitingRes.json().catch(() => ({ tickets: [] }));
@@ -261,7 +262,7 @@ async function initAuth() {
     }
     agentName = me.user.name || agentName || '';
     sessionStorage.setItem('agent_name', agentName);
-    $('#authStatus').textContent = '已登入';
+  (function(el){ if (el) el.textContent = '已登入'; })($('#authStatus'));
     updateAgentNameUI();
     return true;
   } catch (e) {
@@ -286,7 +287,7 @@ function bindHandlers() {
     if (agentName) sessionStorage.setItem('agent_name', agentName);
     if (savedCounter) sessionStorage.setItem('agent_counter', savedCounter);
     if (savedCounter && c) c.value = savedCounter;
-    $('#authStatus').textContent = '已登入';
+  (function(el){ if (el) el.textContent = '已登入'; })($('#authStatus'));
     updateAgentNameUI();
     $('#authOverlay').classList.add('hidden');
     refresh();
@@ -295,7 +296,7 @@ function bindHandlers() {
     try { await apiFetch('/api/auth/logout', { method: 'POST' }); } catch (_) {}
     sessionStorage.removeItem('agent_name');
     sessionStorage.removeItem('agent_counter');
-    $('#authStatus').textContent = '';
+  (function(el){ if (el) el.textContent = ''; })($('#authStatus'));
     updateAgentNameUI();
     window.location.href = '/login/index.html';
   });
