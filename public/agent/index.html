@@ -247,20 +247,22 @@
         }
 
         // apiFetch wrapper: attach x-agent-pin for protected endpoints and x-agent-name for display only
+        // memory-only PIN for this tab; cleared on refresh/close
+        let ADMIN_PIN_MEM = null;
+        window.addEventListener('beforeunload', () => { ADMIN_PIN_MEM = null; });
         async function apiFetch(url, opts = {}) {
             opts = Object.assign({ headers: {} }, opts);
             const name = sessionStorage.getItem('agent_name');
-            const pin = sessionStorage.getItem('admin_pin');
-            if (pin) { opts.headers['x-agent-pin'] = pin; }
+            if (ADMIN_PIN_MEM) { opts.headers['x-agent-pin'] = ADMIN_PIN_MEM; }
             // retain name header only for server-side logging (not for auth)
             if (name) { try { opts.headers['x-agent-name'] = encodeURIComponent(name); } catch (e) { opts.headers['x-agent-name'] = name; } }
-            const res = await fetch(url, opts);
+            let res = await fetch(url, opts);
             if (res.status === 401) {
-                // ask once for PIN then retry
+                // prompt once per action; do not persist
                 const newPin = prompt('請輸入管理 PIN 以使用櫃員功能');
-                if (newPin) sessionStorage.setItem('admin_pin', newPin);
-                opts.headers['x-agent-pin'] = newPin || '';
-                return fetch(url, opts);
+                ADMIN_PIN_MEM = newPin || null;
+                opts.headers['x-agent-pin'] = ADMIN_PIN_MEM || '';
+                res = await fetch(url, opts);
             }
             return res;
         }

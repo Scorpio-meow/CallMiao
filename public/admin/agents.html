@@ -17,7 +17,7 @@
         <input id="adminPin" placeholder="輸入 PIN" />
         <button id="savePin">儲存並載入</button>
       </div>
-      <p class="muted">PIN 將暫存在此瀏覽器（sessionStorage）用於對受保護 API 的呼叫。</p>
+  <p class="muted">PIN 僅暫存於此頁記憶體，不會寫入瀏覽器儲存；重新整理或關閉分頁後需再輸入。</p>
     </div>
 
     <div id="mainArea" class="hidden">
@@ -60,10 +60,13 @@
       setTimeout(() => el.classList.add('hidden'), 4000);
     }
 
-    function getPin() { return sessionStorage.getItem('admin_pin'); }
-    function setPin(v) { if (v) sessionStorage.setItem('admin_pin', v); else sessionStorage.removeItem('admin_pin'); }
-    function getCsrf() { return sessionStorage.getItem('admin_csrf'); }
-    function setCsrf(v) { if (v) sessionStorage.setItem('admin_csrf', v); else sessionStorage.removeItem('admin_csrf'); }
+  // memory-only PIN/CSRF for this tab only
+  let ADMIN_PIN_MEM = null;
+  let ADMIN_CSRF_MEM = null;
+  function getPin() { return ADMIN_PIN_MEM; }
+  function setPin(v) { ADMIN_PIN_MEM = v || null; }
+  function getCsrf() { return ADMIN_CSRF_MEM; }
+  function setCsrf(v) { ADMIN_CSRF_MEM = v || null; }
 
     async function apiFetch(url, opts = {}) {
       opts = Object.assign({ headers: {} }, opts);
@@ -158,13 +161,7 @@
       } catch (err) { showMsg('建立失敗', true); }
     };
 
-    // init: if pin already stored, show main
-    if (getPin()) {
-      // try obtain csrf again if missing
-      const p = getPin();
-      fetch('/api/admin/csrf', { method: 'POST', headers: { 'x-agent-pin': p } })
-        .then(r => r.json()).then(j => { if (j && j.csrfToken) { setCsrf(j.csrfToken); document.getElementById('pinArea').classList.add('hidden'); document.getElementById('mainArea').classList.remove('hidden'); loadAgents(); } else { setPin(null); showMsg('需要重新登入', true); } }).catch(e => { setPin(null); showMsg('驗證失敗', true); });
-    }
+  // no auto-restore; require PIN input every refresh
   </script>
 </body>
 
