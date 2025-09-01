@@ -57,53 +57,51 @@
                 </div>
             </div>
 
-            <div class="stats-box">
-                <div class="stat">
-                    <div class="label">等待人數（本櫃）</div>
-                    <div class="value" id="localWaitCount">0</div>
-                </div>
-                <div class="stat">
-                    <div class="label">等待人數（本行）</div>
-                    <div class="value" id="totalWaitCount">0</div>
-                </div>
+            <div class="stat">
+                <div class="label">總等待人數</div>
+                <div class="value" id="totalWaitCount">0</div>
             </div>
         </div>
 
-        <!-- Service selector (compact) -->
-        <div class="service-compact">
-            <label>服務類型</label>
-            <div class="service-buttons" id="serviceButtons">
-                <button class="btn btn-light active" data-service="A">一般保險服務</button>
-                <button class="btn btn-light" data-service="B">理賠送件服務</button>
-                <button class="btn btn-light" data-service="C">保單借據服務</button>
-                <button class="btn btn-light" data-service="D">繳費服務</button>
-                <button class="btn btn-light" data-service="E">人生設計所保險諮詢</button>
-            </div>
-            <input type="hidden" id="serviceType" value="A" />
-        </div>
+        <table style="width:100%;">
+            <td style="width:49%;">
+                <!-- Footer clock and category list -->
+                <div class="footer-info">
+                    <div class="clock" id="clock">—</div>
+                    <h3 class="section-title">客戶等候名單</h3>
+                    <div id="categoryList" class="category-list"></div>
+                </div>
+            </td>
+            <td style="width:49%;">
+                <!-- Operations matrix -->
+                <div class="ops-grid">
+                    <button class="btn btn-primary op" id="callNext" title="N">叫號</button>
+                    <button class="btn btn-secondary op" id="markServing" title="S">開始服務</button>
+                    <button class="btn btn-primary op outline" id="recall" title="R">重叫號</button>
+                    <button class="btn btn-success op" id="finish" title="F">結束服務</button>
+                    <button class="btn btn-danger op" id="cancel" title="X">取消叫號</button>
 
-        <!-- Operations matrix -->
-        <div class="ops-grid">
-            <button class="btn btn-primary op" id="callNext" title="N">叫號</button>
-            <button class="btn btn-secondary op" id="markServing" title="S">開始服務</button>
-            <button class="btn btn-primary op outline" id="recall" title="R">重叫號</button>
-            <button class="btn btn-success op" id="finish" title="F">結束服務</button>
-            <button class="btn btn-danger op" id="cancel" title="X">取消叫號</button>
+                    <button class="btn btn-light op" id="transfer">轉櫃/轉服務</button>
+                    <button class="btn btn-light op" id="createTicket">櫃檯取號</button>
+                    <button class="btn btn-light op" id="pickup">未取號補取</button>
+                    <button class="btn btn-light op" id="internalCall">內部叫號</button>
 
-            <button class="btn btn-light op" id="transfer">轉櫃/轉服務</button>
-            <button class="btn btn-light op" id="createTicket">櫃檯取號</button>
-            <button class="btn btn-light op" id="pickup">未取號補取</button>
-            <button class="btn btn-light op" id="internalCall">內部叫號</button>
+                    <button class="btn btn-light op" id="pause">暫停服務</button>
+                    <button class="btn btn-light op" id="callSpecific">指定叫號</button>
+                    <button class="btn btn-light op" id="history">歷史叫號查詢</button>
+                    <button class="btn btn-light op" id="message">密傳訊息</button>
+                </div>
 
-            <button class="btn btn-light op" id="pause">暫停服務</button>
-            <button class="btn btn-light op" id="callSpecific">指定叫號</button>
-            <button class="btn btn-light op" id="history">歷史叫號查詢</button>
-            <button class="btn btn-light op" id="message">密傳訊息</button>
-        </div>
+                <div class="verify-line">
+                    <input id="ticketId" placeholder="ticket number" />
+                    <input type="hidden" id="ticketInternalId" />
+                    <input type="hidden" id="serviceType" value="A" />
+                </div>
+                <div id="selectedInfo" class="service-compact muted" style="margin-top:8px"></div>
+                <!-- service buttons will be rendered inside #categoryList by renderCategoryList -->
+            </td>
+        </table>
 
-        <div class="verify-line">
-            <input id="ticketId" placeholder="ticket id" />
-        </div>
 
         <!-- Hidden original tables (kept for JS compatibility) -->
         <div class="legacy-panels hidden">
@@ -135,21 +133,27 @@
                         </thead>
                         <tbody id="current"></tbody>
                     </table>
-                    <div id="selectedInfo" class="selected-info muted"></div>
+                    <div id="selectedInfoLegacy" class="selected-info muted"></div>
                 </div>
             </div>
         </div>
 
-        <!-- Footer clock and category list -->
-        <div class="footer-info">
-            <div class="clock" id="clock">—</div>
-            <h3 class="section-title">客戶等候名單</h3>
-            <div id="categoryList" class="category-list"></div>
-        </div>
+
 
     </div>
 
     <div id="toaster" class="toaster"></div>
+
+    <!-- History modal -->
+    <div id="historyModal" class="auth-overlay hidden">
+        <div class="auth-card" style="width:640px;max-height:70vh;overflow:auto">
+            <h2>歷史叫號</h2>
+            <div id="historyBody" class="muted">載入中…</div>
+            <div class="actions" style="margin-top:12px;display:flex;justify-content:flex-end;gap:8px">
+                <button id="historyClose" class="btn btn-light">關閉</button>
+            </div>
+        </div>
+    </div>
 
     <!-- Local overlay fallback login (kept for backward-compat) -->
     <div id="authOverlay" class="auth-overlay hidden">
@@ -180,15 +184,25 @@
 
     <script>
         const $ = (s) => document.querySelector(s);
-    const socket = io();
-    let agentName = sessionStorage.getItem('agent_name') || '';
-    let savedCounter = sessionStorage.getItem('agent_counter') || '';
+        const socket = io();
+        // 狀態中文對照
+        const STATUS_LABEL = {
+            waiting: '等候',
+            called: '已叫號',
+            serving: '服務中',
+            finished: '已完成',
+            canceled: '已取消',
+            cancelled: '已取消'
+        };
+        function statusLabel(s) { return STATUS_LABEL[s] || (s || '-'); }
+        let agentName = sessionStorage.getItem('agent_name') || '';
+        let savedCounter = sessionStorage.getItem('agent_counter') || '';
 
         function updateAgentNameUI() { $('#agentNameDisplay').textContent = agentName || '—'; }
 
-    if (savedCounter) { const c = document.querySelector('#counter'); if (c && !c.value) c.value = savedCounter; }
-    if (agentName) document.querySelector('#authStatus').textContent = '已登入';
-    updateAgentNameUI();
+        if (savedCounter) { const c = document.querySelector('#counter'); if (c && !c.value) c.value = savedCounter; }
+        if (agentName) document.querySelector('#authStatus').textContent = '已登入';
+        updateAgentNameUI();
 
         // overlay login
         function showOverlay() { document.querySelector('#authOverlay').classList.remove('hidden'); }
@@ -231,16 +245,23 @@
             setTimeout(() => { el.classList.remove('show'); el.remove(); }, 3000);
         }
 
-        // apiFetch wrapper: attach x-agent-name header for demo auth
-        async function apiFetch(url, opts={}){
+        // apiFetch wrapper: attach x-agent-pin for protected endpoints and x-agent-name for display only
+        async function apiFetch(url, opts = {}) {
             opts = Object.assign({ headers: {} }, opts);
             const name = sessionStorage.getItem('agent_name');
-            if(name){
-                // HTTP header values may reject non ISO-8859-1 chars in some browsers.
-                // Encode to percent-encoding to ensure safe transport.
-                try { opts.headers['x-agent-name'] = encodeURIComponent(name); } catch(e) { opts.headers['x-agent-name'] = name; }
+            const pin = sessionStorage.getItem('admin_pin');
+            if (pin) { opts.headers['x-agent-pin'] = pin; }
+            // retain name header only for server-side logging (not for auth)
+            if (name) { try { opts.headers['x-agent-name'] = encodeURIComponent(name); } catch (e) { opts.headers['x-agent-name'] = name; } }
+            const res = await fetch(url, opts);
+            if (res.status === 401) {
+                // ask once for PIN then retry
+                const newPin = prompt('請輸入管理 PIN 以使用櫃員功能（例如 0000）');
+                if (newPin) sessionStorage.setItem('admin_pin', newPin);
+                opts.headers['x-agent-pin'] = newPin || '';
+                return fetch(url, opts);
             }
-            return fetch(url, opts);
+            return res;
         }
 
         function setSelectedInfo(ticket) {
@@ -276,26 +297,35 @@
             // Standard order A..E
             const order = ['A', 'B', 'C', 'D', 'E'];
             const map = (summary || []).reduce((acc, s) => { acc[s.serviceType] = s.waiting || 0; return acc; }, {});
-            const html = order.map(code => {
+            // Render only the category rows (no service buttons or quick counters)
+            const categoriesHtml = `${order.map(code => {
                 const count = map[code] || 0;
                 return `<div class="category-row" data-service="${code}" style="cursor:pointer"><div class="count">${count}</div><div class="label">${SERVICE_NAMES[code] || code}</div></div>`;
-            }).join('');
+            }).join('')}`;
             const wrap = document.querySelector('#categoryList');
             if (wrap) {
-                wrap.innerHTML = html;
-                // click to select serviceType and refresh
-                wrap.querySelectorAll('.category-row').forEach(el => {
+                wrap.innerHTML = categoriesHtml;
+                // click to select serviceType, update visual active state, and refresh
+                const rows = wrap.querySelectorAll('.category-row');
+                rows.forEach(el => {
                     el.onclick = () => {
                         const svc = el.getAttribute('data-service');
                         const svcInput = document.querySelector('#serviceType');
                         if (svcInput) svcInput.value = svc;
-                        // update active button state
-                        document.querySelectorAll('#serviceButtons [data-service]').forEach(b => b.classList.remove('active'));
-                        const btn = document.querySelector(`#serviceButtons [data-service="${svc}"]`);
-                        if (btn) btn.classList.add('active');
+                        // visual active
+                        rows.forEach(r => r.classList.remove('active'));
+                        el.classList.add('active');
                         refresh();
                     };
                 });
+
+                // initialize active row from #serviceType
+                const svc0 = document.querySelector('#serviceType')?.value;
+                if (svc0) {
+                    rows.forEach(r => r.classList.remove('active'));
+                    const initial = wrap.querySelector(`.category-row[data-service="${svc0}"]`);
+                    if (initial) initial.classList.add('active');
+                }
             }
         }
 
@@ -310,35 +340,57 @@
             const waitingTbody = document.querySelector('#waiting');
             if (waitingTbody) {
                 waitingTbody.innerHTML = waitingData.tickets.map(t =>
-                    `<tr class="clickable" data-waiting-id="${t.id}">
-            <td>${t.number}</td>
-            <td>${new Date(t.createdAt).toLocaleTimeString()}</td>
-            <td>${maskPhone(t.phone)}</td>
-          </tr>`
+                    // 補上 data-id 以沿用既有的 [data-id] 點擊事件處理
+                    `<tr class="clickable" data-waiting-id="${t.id}" data-id="${t.id}" data-number="${t.number}">
+                        <td>${t.number}</td>
+                        <td>${new Date(t.createdAt).toLocaleTimeString()}</td>
+                        <td>${maskPhone(t.phone)}</td>
+                    </tr>`
                 ).join('') || '<tr><td colspan="3">無</td></tr>';
             }
 
             const currentTbody = document.querySelector('#current');
             if (currentTbody) {
                 currentTbody.innerHTML = (data.currentCalls || []).map(c =>
-                    `<tr class="clickable" data-id="${c.id}">
-            <td><span class="badge">${c.serviceType}</span> ${c.number}</td>
-            <td>${c.counter || '-'}</td>
-            <td>${new Date(c.calledAt).toLocaleTimeString()}</td>
-            <td><button class="btn btn-light" data-pick="${c.id}">選取</button></td>
-          </tr>`
+                    `<tr class="clickable" data-id="${c.id}" data-number="${c.number}">
+                        <td><span class="badge">${c.serviceType}</span> ${c.number}</td>
+                        <td>${c.counter || '-'}</td>
+                        <td>${new Date(c.calledAt).toLocaleTimeString()}</td>
+                        <td><button class="btn btn-light" data-pick="${c.id}">選取</button></td>
+                    </tr>`
                 ).join('') || '<tr><td colspan="4">無</td></tr>';
             }
 
             document.querySelectorAll('[data-id]').forEach(tr => {
-                tr.onclick = () => { document.querySelector('#ticketId').value = tr.getAttribute('data-id'); };
+                tr.onclick = () => {
+                    const id = tr.getAttribute('data-id');
+                    const num = tr.getAttribute('data-number') || '';
+                    const vis = document.querySelector('#ticketId'); if (vis) vis.value = num || '';
+                    const hid = document.querySelector('#ticketInternalId'); if (hid) hid.value = id || '';
+                };
             });
             document.querySelectorAll('button[data-pick]').forEach(btn => {
-                btn.onclick = (e) => { e.stopPropagation(); document.querySelector('#ticketId').value = btn.getAttribute('data-pick'); };
+                btn.onclick = (e) => {
+                    e.stopPropagation();
+                    const id = btn.getAttribute('data-pick');
+                    const row = document.querySelector(`[data-id="${id}"]`);
+                    const num = row ? (row.getAttribute('data-number') || '') : '';
+                    const vis = document.querySelector('#ticketId'); if (vis) vis.value = num || '';
+                    const hid = document.querySelector('#ticketInternalId'); if (hid) hid.value = id || '';
+                };
             });
 
-            const sel = Number(document.querySelector('#ticketId').value);
-            const cur = (data.currentCalls || []).find(x => x.id === sel);
+            // selection: prefer hidden internal id (numeric). If missing, fallback to visible ticket number match.
+            const hidVal = document.querySelector('#ticketInternalId')?.value;
+            const selId = hidVal ? Number(hidVal) : null;
+            const visNum = document.querySelector('#ticketId')?.value;
+            let cur = null;
+            if (selId) {
+                cur = (data.currentCalls || []).find(x => x.id === selId);
+            }
+            if (!cur && visNum) {
+                cur = (data.currentCalls || []).find(x => String(x.number) === String(visNum));
+            }
             setSelectedInfo(cur || null);
 
             // Stats: local (selected service waiting), total (sum waiting)
@@ -359,7 +411,17 @@
                 } else { waitField.value = '—'; }
             }
             const currentCallField = document.querySelector('#currentCallField');
+            const ticketIdEl = document.querySelector('#ticketId');
+            const ticketInternalEl = document.querySelector('#ticketInternalId');
             if (currentCallField) { currentCallField.value = cur ? cur.number : '—'; }
+            // keep visible ticketId in sync with current call's number, and store internal id in hidden field
+            if (cur) {
+                if (ticketIdEl) ticketIdEl.value = cur.number || '';
+                if (ticketInternalEl) ticketInternalEl.value = (cur.id !== undefined && cur.id !== null) ? String(cur.id) : '';
+            } else {
+                if (ticketIdEl) ticketIdEl.value = '';
+                if (ticketInternalEl) ticketInternalEl.value = '';
+            }
             const serviceTimeField = document.querySelector('#serviceTimeField');
             if (serviceTimeField) {
                 if (cur && cur.calledAt) {
@@ -381,21 +443,32 @@
                 body: JSON.stringify({ serviceType, counter })
             });
             const data = await res.json();
-            if (data.error) { toast(data.error, 'error'); } else { toast(`已叫號 ${data.ticket.number}`, 'success'); document.querySelector('#ticketId').value = data.ticket.id; }
+            if (data.error) { toast(data.error, 'error'); } else { toast(`已叫號 ${data.ticket.number}`, 'success'); document.querySelector('#ticketInternalId').value = data.ticket.id; }
             await refresh();
         };
 
         socket.on('queue:update', refresh);
         socket.on('call:made', refresh);
+        // 接收密傳訊息廣播：其他櫃員或系統訊息
+        socket.on('agent:message', (payload) => {
+            try {
+                const { text, from } = payload || {};
+                if (!text) return;
+                // 若為自己剛發送的訊息，避免重複顯示（已顯示「已送出訊息」）
+                if (from && agentName && String(from) === String(agentName)) return;
+                toast(`【訊息】${from || '系統'}：${text}`, 'info');
+            } catch (e) { /* noop */ }
+        });
         refresh();
 
         $('#markServing').onclick = async () => {
-            const id = $('#ticketId').value;
+            const id = $('#ticketInternalId').value;
             if (!id) { alert('請選取一筆叫號'); return; }
             // fetch ticket to get full phone (not masked)
-            const ticketRes = await apiFetch(`/api/ticket/${Number(id)}`);
+            // use protected endpoint to retrieve phone for verification
+            const ticketRes = await apiFetch(`/api/agent/ticket/${Number(id)}`);
             if (!ticketRes.ok) {
-                const j = await ticketRes.json().catch(()=>({ error: '查詢失敗' }));
+                const j = await ticketRes.json().catch(() => ({ error: '查詢失敗' }));
                 alert(j && j.error ? j.error : '取得票券失敗');
                 return;
             }
@@ -422,22 +495,21 @@
         };
 
         $('#finish').onclick = async () => {
-            const id = $('#ticketId').value;
+            const id = $('#ticketInternalId').value;
             if (!id) { alert('請選取一筆叫號'); return; }
             const result = prompt('處理結果（備註，可留空）') || undefined;
-            const v4 = ($('#verify4').value || '').trim();
             const res = await apiFetch('/api/agent/finish', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ticketId: Number(id), result, verify4: v4 || undefined })
+                body: JSON.stringify({ ticketId: Number(id), result })
             });
             const data = await res.json();
-            if (data.error) { toast(data.error, 'error'); } else { toast(`已完成 ${data.ticket.number}`, 'success'); document.querySelector('#ticketId').value = ''; document.querySelector('#verify4').value = ''; setSelectedInfo(null); }
+            if (data.error) { toast(data.error, 'error'); } else { toast(`已完成 ${data.ticket.number}`, 'success'); document.querySelector('#ticketId').value = ''; document.querySelector('#ticketInternalId').value = ''; setSelectedInfo(null); }
             await refresh();
         };
 
         $('#recall').onclick = async () => {
-            const id = $('#ticketId').value; if (!id) { alert('請選取一筆叫號'); return; }
+            const id = $('#ticketInternalId').value; if (!id) { alert('請選取一筆叫號'); return; }
             const res = await apiFetch('/api/agent/recall', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ticketId: Number(id) })
@@ -448,7 +520,7 @@
         };
 
         $('#cancel').onclick = async () => {
-            const id = $('#ticketId').value; if (!id) { alert('請選取一筆叫號'); return; }
+            const id = $('#ticketInternalId').value; if (!id) { alert('請選取一筆叫號'); return; }
             const reason = prompt('取消原因（可留空）') || undefined;
             const res = await apiFetch('/api/agent/cancel', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -460,7 +532,7 @@
         };
 
         $('#transfer').onclick = async () => {
-            const id = $('#ticketId').value; if (!id) { alert('請選取一筆叫號'); return; }
+            const id = $('#ticketInternalId').value; if (!id) { alert('請選取一筆叫號'); return; }
             const toServiceType = prompt('轉至服務類型（A/B/C/D/E，不填維持）') || undefined;
             const toCounter = prompt('指定櫃台（可留空）') || undefined;
             const keepStatus = confirm('保持狀態與叫號時間？按 確定 保持 / 取消 重置為等待');
@@ -474,7 +546,7 @@
         };
 
         $('#callSpecific').onclick = async () => {
-            const id = $('#ticketId').value; if (!id) { alert('請選取一筆叫號或輸入 ticketId'); return; }
+            const id = $('#ticketInternalId').value; if (!id) { alert('請選取一筆叫號或輸入 ticketId'); return; }
             const counter = $('#counter').value || undefined;
             const res = await apiFetch('/api/agent/callSpecific', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -486,7 +558,7 @@
         };
 
         $('#createTicket').onclick = async () => {
-            
+
             showPhoneModal(async (phone) => {
                 const serviceType = document.querySelector('#serviceType').value;
                 const res = await apiFetch('/api/agent/createTicket', {
@@ -497,7 +569,7 @@
                 if (data.error) { toast(data.error, 'error'); } else { toast(`\u5df2\u5efa\u7acb ${data.ticket.number}`, 'success'); }
                 await refresh();
             });
-         };
+        };
 
         // 未取號補取（與 櫃台取號 相同 API，但顯示不同文案）
         $('#pickup').onclick = async () => {
@@ -511,16 +583,68 @@
                 if (data.error) { toast(data.error, 'error'); } else { toast(`\u5df2\u88dc\u53d6 ${data.ticket.number}`, 'success'); }
                 await refresh();
             });
-         };
+        };
+
+        // 暫停服務：將目前選擇的 ticket 狀態轉為 waiting（相當於 transfer keepStatus=false 保持原服務別與櫃台清空）
+        $('#pause').onclick = async () => {
+            const id = $('#ticketInternalId').value; if (!id) { alert('請選擇一筆叫號'); return; }
+            const res = await apiFetch('/api/agent/transfer', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ticketId: Number(id), keepStatus: false })
+            });
+            const data = await res.json();
+            if (data.error) { toast(data.error, 'error'); } else { toast('已暫停，票券回到等待', 'success'); }
+            await refresh();
+        };
+
+        // 內部叫號：不對外廣播，只更新狀態與叫號時間
+        $('#internalCall').onclick = async () => {
+            const id = $('#ticketInternalId').value; if (!id) { alert('請選擇一筆叫號或輸入 ticketId'); return; }
+            const counter = $('#counter').value || undefined;
+            const res = await apiFetch('/api/agent/callSpecific', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ticketId: Number(id), counter, internal: true })
+            });
+            const data = await res.json();
+            if (data.error) { toast(data.error, 'error'); } else { toast(`內部叫號 ${data.ticket.number}`, 'success'); }
+            await refresh();
+        };
+
+        // 歷史查詢：拉取最近 100 筆已完成/取消
+        $('#history').onclick = async () => {
+            const serviceType = document.querySelector('#serviceType').value;
+            const res = await apiFetch(`/api/agent/history?limit=100&serviceType=${encodeURIComponent(serviceType)}`);
+            const data = await res.json();
+            if (!res.ok || data.error) { alert(data.error || '查詢失敗'); return; }
+            const rows = data.tickets || [];
+            const html = rows.length ? (`<table class="table"><thead><tr><th>號碼</th><th>狀態</th><th>櫃台</th><th>完成時間</th></tr></thead><tbody>` +
+                rows.map(t => `<tr><td>${t.number}</td><td>${statusLabel(t.status)}</td><td>${t.counter || '-'}</td><td>${t.finishedAt ? new Date(t.finishedAt).toLocaleString() : '-'}</td></tr>`).join('') + `</tbody></table>`) : '<div class="muted">無資料</div>';
+            document.querySelector('#historyBody').innerHTML = html;
+            document.querySelector('#historyModal').classList.remove('hidden');
+        };
+        document.querySelector('#historyClose').onclick = () => document.querySelector('#historyModal').classList.add('hidden');
+
+        // 密傳訊息：發送給所有櫃員端（簡易廣播）
+        $('#message').onclick = async () => {
+            const text = prompt('輸入要廣播的訊息');
+            if (!text) return;
+            const res = await apiFetch('/api/agent/message', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text, from: agentName || 'agent' })
+            });
+            const data = await res.json();
+            if (!res.ok || data.error) { alert(data.error || '傳送失敗'); return; }
+            toast('已送出訊息', 'success');
+        };
 
         // phone modal helpers
-        function showPhoneModal(cb){
+        function showPhoneModal(cb) {
             const modal = document.getElementById('phoneInputModal');
             const input = document.getElementById('modalPhone');
             modal.classList.remove('hidden');
             input.value = '';
             input.focus();
-            const onlyDigits = (s) => (s||'').replace(/\D/g, '');
+            const onlyDigits = (s) => (s || '').replace(/\D/g, '');
             const onCancel = () => { modal.classList.add('hidden'); cleanup(); };
             const onOk = () => {
                 const val = input.value.trim();
@@ -533,20 +657,7 @@
             document.getElementById('modalOk').addEventListener('click', onOk);
         }
 
-        // service buttons
-        document.querySelectorAll('#serviceButtons [data-service]').forEach(btn => {
-            btn.onclick = () => {
-                document.querySelector('#serviceType').value = btn.getAttribute('data-service');
-                document.querySelectorAll('#serviceButtons [data-service]').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-                refresh();
-            };
-        });
-
-        // quick counter buttons
-        document.querySelectorAll('[data-counter]').forEach(btn => {
-            btn.onclick = () => { document.querySelector('#counter').value = btn.getAttribute('data-counter'); };
-        });
+        // service buttons and quick counters are rendered and bound inside renderCategoryList
 
         // keyboard shortcuts
         window.addEventListener('keydown', (e) => {
@@ -558,6 +669,17 @@
 
         // open second screen
         document.querySelector('#openSecondScreen').onclick = () => { window.open('/lobby/index.html', '_blank'); };
+
+        // persist counter change
+        const counterEl = document.querySelector('#counter');
+        if (counterEl) {
+            counterEl.addEventListener('change', () => {
+                const v = counterEl.value.trim();
+                sessionStorage.setItem('agent_counter', v);
+            });
+        }
+
+        // no initServiceButtons needed when service buttons are not rendered here
     </script>
 </body>
 
