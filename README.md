@@ -1,181 +1,199 @@
 # 數位叫號嵌入式網頁模組
 
-可嵌入任何既有網站或資訊站的前台取號 Widget、櫃員端後台、以及大廳顯示頁。含 REST API、WebSocket 即時通知、SQLite 輕量資料庫與 QR Code 取號/查詢。
+可嵌入既有網站或資訊站的取號 Widget、櫃員端（Agent）、大廳顯示（Lobby），搭配 REST API、WebSocket 即時通知、SQLite 輕量資料庫與 QR Code 取號/查詢。
 
-# 數位叫號嵌入式網頁模組
+內容包含：
 
-輕量、可嵌入的數位叫號系統範例。包含：
+- 客戶端（Kiosk / Widget）：取號與票券 QR
+- 櫃員端（Agent）：登入、叫號、重叫、轉服務、完成、取消
+- 大廳顯示（Lobby）：即時叫號顯示與事件播報
+- 後端：Express REST API、Socket.IO、SQLite、Captcha（圖形驗證碼）與管理 API
 
-- 客戶端（Kiosk / Widget）：取號流程與票券 QR
-- 櫃員端（Agent）：登入 + 操作叫號 / 轉服務 / 完成等功能
-- 大廳顯示（Lobby）：即時展示與語音播報事件
-- 後端：Express REST API、Socket.IO、SQLite 儲存、QR 圖片產生
 
-這個 repo 提供一個可跑的原型，方便整合到既有網站或內部系統。
+## 快速開始（Windows PowerShell）
 
----
-
-## 快速開始
-
-1. 安裝套件
+1) 安裝相依套件
 
 ```powershell
 npm install
 ```
 
-2. 啟動（開發）
+2) 設定環境變數並啟動（開發）
 
-```powershell
-npm run dev
-```
-
-3. 打開瀏覽器
-
-- 取號 Widget：`http://localhost:3000/kiosk/index.html`
-- 櫃員端：`http://localhost:3000/agent/index.html`
-- 大廳顯示：`http://localhost:3000/lobby/index.html`
-- 管理頁面：`http://localhost:3000/admin/agents.html`
-
-安全說明：必須設定 `AGENT_PIN` 環境變數（伺服器啟動會檢查，若未設定將中止啟動）。
-設定範例（PowerShell, 臨時）：
 ```powershell
 $env:AGENT_PIN='0000'; npm run dev
 ```
-或永久設定（Windows):
+
+3) 開啟以下頁面
+
+- Kiosk：http://localhost:3000/kiosk/index.html
+- Agent：http://localhost:3000/agent/index.html
+- Lobby：http://localhost:3000/lobby/index.html
+- 管理頁：http://localhost:3000/admin/agents.html
+
+提示：若你看到「嚴重錯誤：需要 AGENT_PIN 環境變數。」請依上方指令設定後重啟。
+
+
+## 需求與相容性
+
+- Node.js 16 以上（建議 18+）
+- Windows / macOS / Linux 皆可
+- 內建 SQLite（第一次啟動會建立 `db/queue.db`）
+
+
+## 設定（環境變數）
+
+- AGENT_PIN（必填）：後台/管理 API 所需的 PIN；伺服器啟動時會強制檢查
+- PORT（選填，預設 3000）：HTTP 服務埠
+- ALLOWED_ORIGINS（選填）：允許的前端網域清單，逗號分隔，例如：
+  - `http://localhost:3000,http://127.0.0.1:3000`
+- NODE_ENV（選填）：`production` 時請搭配更嚴格的 CORS/CSP 設定
+
+在 Windows 永久設定環境變數：
+
 ```powershell
 setx AGENT_PIN "0000"
-# 關閉並重開 PowerShell 視窗後再啟動
+# 關閉並重開 PowerShell 視窗後生效
 ```
 
-管理頁面：`/admin/agents.html`
-- 可透過瀏覽器開啟 `http://<host>:<port>/admin/agents.html`，輸入 `x-agent-pin` 後即可列出與管理帳號（建立/編輯/刪除）。
 
-若要用 CLI 建立帳號（PowerShell 範例）：
-```powershell
-$body = @{ account='alice'; name='Alice'; password='pass123'; counter='1' } | ConvertTo-Json
-Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/agents -ContentType 'application/json' -Body $body -Headers @{ 'x-agent-pin' = '0000' }
-```
+## 專案結構
 
-或 curl：
-```bash
-curl -X POST http://localhost:3000/api/agents \
-  -H "Content-Type: application/json" \
-  -H "x-agent-pin: 0000" \
-  -d '{"account":"alice","name":"Alice","password":"pass123","counter":"1"}'
-```
-
----
-
-## 專案檔案說明
-
-- `server.js`：主伺服器程式（Express + Socket.IO），包含所有 REST API 與 Captcha / Login 範例
-- `public/`：前端靜態資源
-  - `kiosk/`：取號小工具（可 iframe 或直接開啟）
-  - `agent/`：櫃員端控制介面
+- `server.js`：主伺服器（Express + Socket.IO）與所有 API 路由
+- `public/`：前端靜態頁面
+  - `login/`：登入頁（Captcha）
+  - `agent/`：櫃員端操作頁
+  - `kiosk/`：取號小工具（可用 iframe 嵌入）
   - `lobby/`：大廳顯示頁
   - `ticket/`：票券查詢頁
-- `db/queue.db`：SQLite 檔案（第一次啟動時建立）
+- `db/queue.db`：SQLite 資料檔
 
----
 
-## API 詳細
+## 管理與帳號（CSRF 流程）
 
-認證：多數 agent 操作需要在 header 中帶 `x-agent-pin`（或在環境變數 `AGENT_PIN` 設定相符），或用 `/api/login` 的延伸驗證。
+管理 UI（`/admin/agents.html`）與管理 API 需要：
 
-公共 API:
+1) 於 Header 帶入 `x-agent-pin: <AGENT_PIN>`
+2) 先呼叫 POST `/api/admin/csrf` 取得 `{ csrfToken }`
+3) 後續在瀏覽器來源（Origin 在 ALLOWED_ORIGINS 內）呼叫 `/api/agents` 的 POST/PUT/DELETE 時，加上 Header `x-csrf-token: <csrfToken>`
 
-- GET `/api/health` — 健康檢查
-- POST `/api/tickets` — 建立號碼
-  - Body: { serviceType: 'A'|'B'|..., phone?: '0912...' }
-  - Response: { ticket }
-- GET `/api/tickets/waiting?serviceType=A` — 取得等待清單
-- GET `/api/ticket/:id` — 查詢單張票券
-- GET `/api/overview` — 回傳 summary + currentCalls
-- GET `/api/qrcode?text=...` — 產生 PNG 的 QR code
+PowerShell 範例（建立帳號）：
 
-Captcha / Login 流程:
+```powershell
+$csrf = Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/admin/csrf -Headers @{ 'x-agent-pin' = '0000' }
+$body = @{ account='alice'; name='Alice'; password='pass123'; counter='1' } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/agents -ContentType 'application/json' -Body $body -Headers @{ 'x-agent-pin' = '0000'; 'x-csrf-token' = $csrf.csrfToken }
+```
 
-- GET `/api/captcha/new` — 產生一組 Captcha token（回傳 { token, expiresAt }）
-- GET `/api/captcha/image/:token` — 以 PNG 圖檔回傳該 token 的驗證碼影像（Content-Type: image/png）
-- POST `/api/login` — 驗證 captcha 與帳密
-  - Body: { account, password, captchaToken, captcha }
-  - 回傳: { ok: true }（範例實作接受任何帳密；請在此位置接入真實驗證）
+備註：CSRF 僅對帶有瀏覽器 `Origin` 且落在 ALLOWED_ORIGINS 的請求強制檢查；CLI（如 curl/Invoke-RestMethod）預設無 Origin，CSRF 不會被觸發。
 
-Agent API（需要 x-agent-pin）:
 
-- POST `/api/agent/callNext` — 叫下一位 { serviceType, counter }
-- POST `/api/agent/callSpecific` — 指定一張票 { ticketId, counter, internal }
-- POST `/api/agent/markServing` — 標記開始服務 { ticketId }
-- POST `/api/agent/finish` — 結束 { ticketId, result, verify4 }
-- POST `/api/agent/recall` — 重叫 { ticketId }
-- POST `/api/agent/cancel` — 取消 { ticketId, reason }
-- POST `/api/agent/transfer` — 轉櫃/轉服務 { ticketId, toServiceType, toCounter, keepStatus }
-- POST `/api/agent/createTicket` — 櫃台建立票券 { serviceType, phone }
-- GET `/api/agent/history?serviceType=A&limit=50` — 歷史查詢
-- POST `/api/agent/message` — 廣播訊息給 agent
+## API 摘要
 
----
+公共 API：
 
-## Socket.IO 事件
+- GET `/api/health`：健康檢查
+- POST `/api/tickets`：建立號碼（Body：`{ serviceType:'A', phone:'09...' }`，phone 必填）
+- GET `/api/tickets/waiting?serviceType=A`：取得等待清單
+- GET `/api/ticket/:id`：查詢單筆票券（隱去 phone）
+- GET `/api/overview`：回傳 summary + currentCalls
+- GET `/api/qrcode?text=...`：回傳 PNG QR 圖檔
 
-- `queue:update` — 等候/現況摘要更新（payload: { serviceType, overview })
-- `call:made` — 叫號事件（payload: { ticket })
-- `agent:message` — agent 間的廣播訊息
+Captcha / Login：
 
-前端應該在 socket 連線後監聽這些事件以即時更新畫面。
+- GET `/api/captcha/new`：產生 `{ token, expiresAt }`
+- GET `/api/captcha/image/:token`：回傳對應 token 的驗證碼圖片（預設 PNG；若 `sharp` 不可用則回傳 SVG）
+- POST `/api/login`：驗證 Captcha 與帳密（與 `agents` 表連動；回傳 `{ ok:true, agent }`）
 
----
+Agent / 管理 API（Header 需帶 `x-agent-pin`）：
 
-## 前端頁面說明
+- POST `/api/agent/callNext`：叫下一位（Body：`{ serviceType, counter }`）
+- POST `/api/agent/callSpecific`：指定叫號（Body：`{ ticketId, counter, internal? }`）
+- POST `/api/agent/markServing`：標記開始服務（Body：`{ ticketId }`）
+- POST `/api/agent/finish`：完成（Body：`{ ticketId, result?, verify4? }`，可驗證電話末 4 碼）
+- POST `/api/agent/recall`：重叫（Body：`{ ticketId }`）
+- POST `/api/agent/cancel`：取消（Body：`{ ticketId, reason? }`）
+- POST `/api/agent/transfer`：轉櫃/轉服務（Body：`{ ticketId, toServiceType?, toCounter?, keepStatus? }`）
+- POST `/api/agent/createTicket`：櫃台代客取號（Body：`{ serviceType, phone }`）
+- GET `/api/agent/history?serviceType=A&limit=50`：歷史紀錄
+- GET `/api/agent/ticket/:id`：取票券詳情（含 phone）
 
-- `public/login/index.html` — 登入頁（使用 Captcha token + 圖檔）；成功後會把 `agent_name` / `agent_pin` 寫入 `sessionStorage` 並導向 `agent/index.html`。
-- `public/agent/index.html` — 櫃員端，含：
-  - 登入覆蓋層（若 sessionStorage 無 PIN）
-  - 服務選擇、櫃台號、12 功能按鈕矩陣
-  - 目前等待清單 / 目前服務中清單（保留舊表格以相容舊邏輯）
-  - 分類等候數、即時鐘、歷史查詢
-- `public/kiosk/index.html` — 客戶端取號頁（彈窗輸入電話、顯示票券 QR 及連結）
-- `public/lobby/index.html` — 大廳顯示（語音播報 call:made）
-- `public/ticket/index.html` — 個別票券頁（透過 QR 查詢）
+管理 agents（需 `x-agent-pin`，且瀏覽器來源需 `x-csrf-token`）：
 
----
+- GET `/api/agents`、GET `/api/agents/:id`
+- POST `/api/agents`、PUT `/api/agents/:id`、DELETE `/api/agents/:id`
 
-## 專案開發/測試
 
-- 建議用 Node 16+（已在 package.json 中指定常見套件）
-- 調試：`npm run dev`（需要 nodemon）
-- 若要在遠端或 Docker 上部署，請設定 `PORT` 與 `AGENT_PIN` 環境變數
+## WebSocket 事件
 
-測試 Captcha 與 Login:
+- `queue:update`：等候與現況摘要更新（payload：`{ serviceType, overview }`）
+- `call:made`：叫號事件（payload：`{ ticket }`）
+- `agent:message`：Agent 廣播訊息
 
-1. 開啟 `http://localhost:3000/login/index.html`
-2. 點擊驗證碼圖片（或刷新頁面）取得新的 token 與 PNG
-3. 輸入驗證碼（圖片上的 6 位數）以及任意帳號/密碼，送出
 
-若要連接真實認證（AD/LDAP 或資料庫），請修改 `server.js` 中 `/api/login` 的驗證段落；我可以幫你加入範例連接器。
+## 資料模型（SQLite）
 
----
+- `seq(serviceType, ymd, seq)`：各服務別每日流水號
+- `tickets(id, serviceType, number, phone, status, counter, result, createdAt, calledAt, finishedAt)`
+- `agents(id, account, name, password[bcrypt], counter, role, active, createdAt, updatedAt)`
 
-## 安全與生產準備（注意事項）
 
-- 目前 Captcha 與 Login 為示範：
-  - Captcha 暫存在記憶體中，重啟會失效；生產應改為 Redis 或 DB 共享儲存
-  - Login 範例接受任何帳密；請務必整合企業身分驗證（LDAP/SSO）或資料庫密碼雜湊比較
-- CSP 與 Cookie：目前範例在 middleware 中已加入簡單 CSP；根據部署情境請收緊規則
-- 日誌與監控：建議加入 request logging（morgan/winston）與錯誤追蹤（Sentry）
+## 常用操作（PowerShell 範例）
 
----
+- 取號（公共 API）：
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/tickets -ContentType 'application/json' -Body (@{ serviceType='A'; phone='0912345678' } | ConvertTo-Json)
+```
 
-## 後續建議
+- 叫下一位（Agent）：
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/agent/callNext -ContentType 'application/json' -Body (@{ serviceType='A'; counter='1' } | ConvertTo-Json) -Headers @{ 'x-agent-pin' = '0000' }
+```
 
-- 將 Captcha 儲存改為 Redis（分布式服務）
-- 加入使用者角色（agent/admin）與更細緻的權限控制
-- 整合 SMS / LINE 推播以通知客戶叫號
-- 增加報表匯出與 SLA 監測
+- 建立/管理帳號（需 CSRF）：
+```powershell
+$csrf = Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/admin/csrf -Headers @{ 'x-agent-pin' = '0000' }
+Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/agents -ContentType 'application/json' -Body (@{ account='alice'; name='Alice'; password='pass123'; counter='1' } | ConvertTo-Json) -Headers @{ 'x-agent-pin' = '0000'; 'x-csrf-token' = $csrf.csrfToken }
+```
 
----
 
-Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/agents `
-  -ContentType 'application/json' `
-  -Body (@{ account='alice'; name='Alice'; password='pass123' } | ConvertTo-Json) `
-  -Headers @{ 'x-agent-pin' = '0000' }
+## 疑難排解（Troubleshooting）
+
+- 啟動失敗/Exit Code 1，並顯示「需要 AGENT_PIN 環境變數」：
+  - 於 PowerShell 執行：`$env:AGENT_PIN='0000'; npm run dev`
+
+- 連線被拒（EADDRINUSE: address already in use 3000）：
+  - 變更埠：`$env:PORT='3001'; npm run dev`
+  - 或關閉佔用 3000 埠的程式
+
+- SQLite database is locked / SQLITE_BUSY：
+  - 可能同時有其它程式開啟 `db/queue.db`（另一個 node 程式或資料庫檢視器）
+  - 請關閉相關程式；必要時重新開機或刪除暫存 `queue.db-wal`/`queue.db-shm`（務必停機/備份）
+
+- CORS 錯誤（CORS origin denied）：
+  - 設定 `ALLOWED_ORIGINS`，例如：`$env:ALLOWED_ORIGINS='http://localhost:3000,http://127.0.0.1:3000'`
+
+- Captcha 圖片顯示錯誤或 `sharp` 安裝失敗：
+  - `sharp` 為可選；若無法安裝，服務會自動改以 SVG 回傳圖片，功能仍可使用
+
+- 呼叫管理 API 回傳 `missing csrf token`：
+  - 請先呼叫 `/api/admin/csrf` 取得 token，並於瀏覽器來源請求加上 `x-csrf-token`
+
+- 取號回傳 `phone is required`：
+  - 目前設計強制需提供電話（僅數字會被保留），請在 Body 加入 `phone`
+
+
+## 安全與生產建議
+
+- Captcha 暫存於記憶體，建議改為 Redis/DB 做分散式與重啟持久化
+- 登入驗證使用 `agents` 表與 bcrypt 密碼雜湊；請搭配公司 SSO/LDAP 或自有帳號系統
+- 收緊 CORS/CSP、加上 HTTPS 與反向代理（Nginx/Ingress）
+- 監控與日誌：建議整合 morgan/winston 與 Sentry/Elastic 方案
+
+更多安全指引：`Security-Guidelines_Traditional-Chinese.md`、`Security-Guidelines-Explanation_Traditional-Chinese.md`、`security-fixes.md`
+
+
+## 套件腳本
+
+- `npm run dev`：以 nodemon 啟動（開發）
+- `npm start`：以 node 啟動（生產）

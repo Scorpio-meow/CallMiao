@@ -7,3 +7,20 @@ header,footer{padding:16px 24px;background:#101938}
 .row.empty{justify-content:center}
 .num{font-size:56px;font-weight:700}
 .ctr{font-size:28px}
+
+.enable-sound{
+	position:fixed;
+	right:16px;
+	bottom:16px;
+	z-index:9999;
+	background:#2b77ff;
+	color:#fff;
+	border:none;
+	padding:10px 14px;
+	border-radius:8px;
+	box-shadow:0 4px 10px rgba(0,0,0,0.3);
+	cursor:pointer;
+	font-size:14px;
+}
+
+.enable-sound:active{transform:translateY(1px)}
