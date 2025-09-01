@@ -63,8 +63,8 @@
             </div>
         </div>
 
-        <table style="width:100%;">
-            <td style="width:49%;">
+        <table class="w-100">
+            <td class="w-49">
                 <!-- Footer clock and category list -->
                 <div class="footer-info">
                     <div class="clock" id="clock">—</div>
@@ -72,7 +72,7 @@
                     <div id="categoryList" class="category-list"></div>
                 </div>
             </td>
-            <td style="width:49%;">
+            <td class="w-49">
                 <!-- Operations matrix -->
                 <div class="ops-grid">
                     <button class="btn btn-primary op" id="callNext" title="N">叫號</button>
@@ -97,7 +97,7 @@
                     <input type="hidden" id="ticketInternalId" />
                     <input type="hidden" id="serviceType" value="A" />
                 </div>
-                <div id="selectedInfo" class="service-compact muted" style="margin-top:8px"></div>
+                <div id="selectedInfo" class="service-compact muted mt-8"></div>
                 <!-- service buttons will be rendered inside #categoryList by renderCategoryList -->
             </td>
         </table>
@@ -146,10 +146,10 @@
 
     <!-- History modal -->
     <div id="historyModal" class="auth-overlay hidden">
-        <div class="auth-card" style="width:640px;max-height:70vh;overflow:auto">
+    <div class="auth-card w-640 maxh-70vh overflow-auto">
             <h2>歷史叫號</h2>
             <div id="historyBody" class="muted">載入中…</div>
-            <div class="actions" style="margin-top:12px;display:flex;justify-content:flex-end;gap:8px">
+            <div class="actions mt-12 flex-end gap-8">
                 <button id="historyClose" class="btn btn-light">關閉</button>
             </div>
         </div>
@@ -163,7 +163,7 @@
             <input id="loginName" placeholder="輸入姓名" />
             <label>櫃台（必填）</label>
             <input id="loginCounter" placeholder="櫃台編號" />
-            <div class="actions" style="margin-top:12px;display:flex;justify-content:flex-end;gap:8px">
+            <div class="actions mt-12 flex-end gap-8">
                 <button id="loginBtn" class="btn btn-primary">登入</button>
             </div>
         </div>
@@ -175,7 +175,7 @@
             <h2>輸入電話（必填）</h2>
             <label>電話</label>
             <input id="modalPhone" placeholder="0912345678" required />
-            <div class="actions" style="margin-top:12px;display:flex;justify-content:flex-end;gap:8px">
+            <div class="actions mt-12 flex-end gap-8">
                 <button id="modalCancel" class="btn btn-light">取消</button>
                 <button id="modalOk" class="btn btn-primary">確定</button>
             </div>
@@ -301,7 +301,7 @@
             // Render only the category rows (no service buttons or quick counters)
             const categoriesHtml = `${order.map(code => {
                 const count = map[code] || 0;
-                return `<div class="category-row" data-service="${code}" style="cursor:pointer"><div class="count">${count}</div><div class="label">${SERVICE_NAMES[code] || code}</div></div>`;
+                return `<div class="category-row" data-service="${code}"><div class="count">${count}</div><div class="label">${SERVICE_NAMES[code] || code}</div></div>`;
             }).join('')}`;
             const wrap = document.querySelector('#categoryList');
             if (wrap) {

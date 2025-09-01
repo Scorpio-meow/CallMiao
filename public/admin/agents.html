@@ -5,145 +5,60 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Agents 管理</title>
-  <style>
-    body {
-      font-family: system-ui, Segoe UI, Roboto, Arial;
-      margin: 16px;
-      background: #f6f7fb
-    }
-
-    .card {
-      max-width: 900px;
-      margin: 0 auto;
-      background: #fff;
-      padding: 16px;
-      border-radius: 10px;
-      box-shadow: 0 8px 24px rgba(2, 6, 23, .06)
-    }
-
-    h1 {
-      margin: 0 0 12px
-    }
-
-    label {
-      display: block;
-      margin: 8px 0 4px
-    }
-
-    input,
-    select {
-      padding: 8px;
-      border: 1px solid #e5e7eb;
-      border-radius: 6px;
-      width: 100%
-    }
-
-    .row {
-      display: flex;
-      gap: 8px
-    }
-
-    .row>* {
-      flex: 1
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 12px
-    }
-
-    th,
-    td {
-      padding: 8px;
-      border-bottom: 1px solid #eef2ff;
-      text-align: left
-    }
-
-    .muted {
-      color: #6b7280
-    }
-
-    .actions {
-      display: flex;
-      gap: 8px
-    }
-
-    button {
-      padding: 8px 10px;
-      border-radius: 6px;
-      border: 0;
-      background: #2563eb;
-      color: #fff
-    }
-
-    button.danger {
-      background: #dc2626
-    }
-
-    .small {
-      padding: 6px 8px;
-      font-size: 13px
-    }
-
-    .notice {
-      margin: 8px 0;
-      padding: 8px;
-      border-radius: 6px;
-      background: #fff7ed;
-      color: #92400e
-    }
-
-    .hidden {
-      display: none
-    }
-  </style>
+  <link rel="stylesheet" href="/admin/style.css" />
 </head>
 
 <body>
   <div class="card">
     <h1>帳號管理（需輸入管理 PIN）</h1>
     <div id="pinArea">
-      <label>管理 PIN</label>
+      <label for="adminPin">管理 PIN</label>
       <div class="row">
-        <input id="adminPin" placeholder="輸入pin" />
+        <input id="adminPin" placeholder="輸入 PIN" />
         <button id="savePin">儲存並載入</button>
       </div>
       <p class="muted">PIN 將暫存在此瀏覽器（sessionStorage）用於對受保護 API 的呼叫。</p>
     </div>
 
     <div id="mainArea" class="hidden">
-      <div style="display:flex;justify-content:space-between;align-items:center">
+      <div class="flex-between-center">
         <strong>已登入為管理員</strong>
         <div class="actions">
           <button id="logout" class="small">登出</button>
         </div>
       </div>
 
-      <div style="margin-top:12px">
+      <div class="mt-12">
         <h3>建立新帳號</h3>
-        <label>帳號 (account)</label>
-        <input id="newAccount" />
-        <label>姓名 (name)</label>
-        <input id="newName" />
+        <label for="newAccount">帳號 (account)</label>
+        <input id="newAccount" placeholder="輸入帳號" />
+        <label for="newName">姓名 (name)</label>
+        <input id="newName" placeholder="輸入姓名（可留空）" />
         <div class="row">
-          <div><label>密碼</label><input id="newPassword" type="password" /></div>
-          <div><label>櫃台（必填）</label><input id="newCounter" /></div>
+          <div><label for="newPassword">密碼</label><input id="newPassword" type="password" placeholder="輸入密碼" /></div>
+          <div><label for="newCounter">櫃台（必填）</label><input id="newCounter" placeholder="例如 1" /></div>
         </div>
-        <div style="margin-top:8px"><button id="createBtn">建立</button></div>
+        <div class="mt-8"><button id="createBtn">建立</button></div>
       </div>
 
-      <div style="margin-top:18px">
+      <div class="mt-18">
         <h3>現有帳號</h3>
         <div id="agentsWrap">載入中…</div>
       </div>
     </div>
 
-    <div id="msg" class="notice hidden"></div>
+  <div id="msg" class="notice hidden"></div>
   </div>
 
   <script>
-    function showMsg(text, err) { const el = document.getElementById('msg'); el.textContent = text; el.classList.remove('hidden'); el.style.background = err ? '#fff1f2' : '#ecfdf5'; el.style.color = err ? '#991b1b' : '#065f46'; setTimeout(() => el.classList.add('hidden'), 4000); }
+    function showMsg(text, err) {
+      const el = document.getElementById('msg');
+      el.textContent = text;
+      el.classList.remove('hidden');
+      el.classList.remove('ok','error');
+      el.classList.add(err ? 'error' : 'ok');
+      setTimeout(() => el.classList.add('hidden'), 4000);
+    }
 
     function getPin() { return sessionStorage.getItem('admin_pin'); }
     function setPin(v) { if (v) sessionStorage.setItem('admin_pin', v); else sessionStorage.removeItem('admin_pin'); }

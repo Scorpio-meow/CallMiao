@@ -55,7 +55,7 @@ button{padding:8px 12px;border-radius:8px}
 .clock{font-weight:700;color:#111827;margin-bottom:8px}
 .section-title{margin:4px 0 8px}
 .category-list{display:flex;flex-direction:column;gap:6px}
-.category-row{display:flex;align-items:center;gap:8px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:8px}
+.category-row{display:flex;align-items:center;gap:8px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:8px;cursor:pointer}
 .category-row .count{min-width:28px;height:28px;border-radius:8px;background:#ef4444;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800}
 .category-row .label{font-weight:600}
 
@@ -83,3 +83,14 @@ button{padding:8px 12px;border-radius:8px}
   .info-grid{grid-template-columns:1fr 1fr}
   .ops-grid{grid-template-columns:1fr 1fr}
 }
+
+/* utilities for removing inline styles */
+.w-100{width:100%}
+.w-49{width:49%}
+.mt-8{margin-top:8px}
+.mt-12{margin-top:12px}
+.flex-end{display:flex;justify-content:flex-end}
+.gap-8{gap:8px}
+.w-640{width:640px}
+.maxh-70vh{max-height:70vh}
+.overflow-auto{overflow:auto}
