@@ -50,7 +50,7 @@
                     <input id="serviceTimeField" readonly placeholder="—" />
                 </div>
                 <div class="info-field smallctrl">
-                    <label>櫃台號</label>
+                    <label>櫃台號（必填）</label>
                     <div class="counter-group">
                         <input id="counter" placeholder="1" />
                     </div>
@@ -161,7 +161,7 @@
             <h2>櫃員登入</h2>
             <label>姓名</label>
             <input id="loginName" placeholder="輸入姓名" />
-            <label>櫃台（選填）</label>
+            <label>櫃台（必填）</label>
             <input id="loginCounter" placeholder="櫃台編號" />
             <div class="actions" style="margin-top:12px;display:flex;justify-content:flex-end;gap:8px">
                 <button id="loginBtn" class="btn btn-primary">登入</button>
@@ -216,6 +216,7 @@
             const nm = document.querySelector('#loginName').value.trim();
             const ctr = document.querySelector('#loginCounter').value.trim();
             if (!nm) { alert('請輸入姓名'); return; }
+            if (!ctr) { alert('請輸入櫃台號'); return; }
             agentName = nm; savedCounter = ctr;
             if (agentName) sessionStorage.setItem('agent_name', agentName);
             if (savedCounter) sessionStorage.setItem('agent_counter', savedCounter);
@@ -436,7 +437,8 @@
         // Existing handlers (mostly unchanged)
         $('#callNext').onclick = async () => {
             const serviceType = $('#serviceType').value;
-            const counter = $('#counter').value || undefined;
+            const counter = ($('#counter').value || '').trim();
+            if (!counter) { alert('請先輸入櫃台號'); return; }
             const res = await apiFetch('/api/agent/callNext', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -547,7 +549,8 @@
 
         $('#callSpecific').onclick = async () => {
             const id = $('#ticketInternalId').value; if (!id) { alert('請選取一筆叫號或輸入 ticketId'); return; }
-            const counter = $('#counter').value || undefined;
+            const counter = ($('#counter').value || '').trim();
+            if (!counter) { alert('請先輸入櫃台號'); return; }
             const res = await apiFetch('/api/agent/callSpecific', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ticketId: Number(id), counter })
@@ -600,7 +603,8 @@
         // 內部叫號：不對外廣播，只更新狀態與叫號時間
         $('#internalCall').onclick = async () => {
             const id = $('#ticketInternalId').value; if (!id) { alert('請選擇一筆叫號或輸入 ticketId'); return; }
-            const counter = $('#counter').value || undefined;
+            const counter = ($('#counter').value || '').trim();
+            if (!counter) { alert('請先輸入櫃台號'); return; }
             const res = await apiFetch('/api/agent/callSpecific', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ticketId: Number(id), counter, internal: true })

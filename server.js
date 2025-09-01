@@ -377,6 +377,8 @@ function requireCsrf(req, res, next){
 app.post('/api/agent/callNext', requirePin, (req, res) => {
   const { serviceType, counter } = req.body || {};
   if (!serviceType) return res.status(400).json({ error: 'serviceType is required' });
+  const ctr = (counter === undefined || counter === null) ? '' : String(counter).trim();
+  if (!ctr) return res.status(400).json({ error: 'counter is required' });
   const ticket = db.prepare(`
     SELECT * FROM tickets
     WHERE serviceType=? AND status='waiting'
@@ -386,7 +388,7 @@ app.post('/api/agent/callNext', requirePin, (req, res) => {
   if (!ticket) return res.status(404).json({ error: 'no waiting ticket' });
   const calledAt = dayjs().toISOString();
   db.prepare('UPDATE tickets SET status=?, calledAt=?, counter=? WHERE id=?')
-    .run('called', calledAt, counter || null, ticket.id);
+    .run('called', calledAt, ctr, ticket.id);
   const updated = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticket.id);
   io.emit('call:made', { ticket: updated });
   emitQueueUpdate(serviceType.toUpperCase());
@@ -498,11 +500,13 @@ app.post('/api/agent/createTicket', requirePin, (req, res) => {
 app.post('/api/agent/callSpecific', requirePin, (req, res) => {
   const { ticketId, counter, internal } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: 'ticketId is required' });
+  const ctr = (counter === undefined || counter === null) ? '' : String(counter).trim();
+  if (!ctr) return res.status(400).json({ error: 'counter is required' });
   const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
   if (!row) return res.status(404).json({ error: 'not found' });
   const calledAt = dayjs().toISOString();
   db.prepare('UPDATE tickets SET status=?, calledAt=?, counter=? WHERE id=?')
-    .run('called', calledAt, counter || null, ticketId);
+    .run('called', calledAt, ctr, ticketId);
   const updated = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
   if (!internal) io.emit('call:made', { ticket: updated });
   emitQueueUpdate(updated.serviceType);
