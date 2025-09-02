@@ -18,10 +18,21 @@
 npm install
 ```
 
-2) 設定環境變數並啟動（開發）
+2) 建立 .env 並啟動（開發）
+
+可參考 `.env.example` 建立 `.env` 檔：
+
+```
+PORT=3000
+AGENT_PIN=0000
+ALLOWED_ORIGINS=http://localhost:3000
+NODE_ENV=development
+```
+
+然後啟動：
 
 ```powershell
-$env:AGENT_PIN='0000'; npm run dev
+npm run dev
 ```
 
 3) 開啟以下頁面
@@ -31,7 +42,7 @@ $env:AGENT_PIN='0000'; npm run dev
 - Lobby：http://localhost:3000/lobby/index.html
 - 管理頁：http://localhost:3000/admin/agents.html
 
-提示：若你看到「嚴重錯誤：需要 AGENT_PIN 環境變數。」請依上方指令設定後重啟。
+提示：若你看到「嚴重錯誤：需要 AGENT_PIN 環境變數。」請在 `.env` 設定後重啟。
 
 
 ## 需求與相容性
@@ -41,15 +52,16 @@ $env:AGENT_PIN='0000'; npm run dev
 - 內建 SQLite（第一次啟動會建立 `db/queue.db`）
 
 
-## 設定（環境變數）
+## 設定（.env／環境變數）
 
 - AGENT_PIN（必填）：後台/管理 API 所需的 PIN；伺服器啟動時會強制檢查
 - PORT（選填，預設 3000）：HTTP 服務埠
 - ALLOWED_ORIGINS（選填）：允許的前端網域清單，逗號分隔，例如：
   - `http://localhost:3000,http://127.0.0.1:3000`
+- PUBLIC_ORIGIN（選填）：對外公開的網址（用於 QR 與公開連結）
 - NODE_ENV（選填）：`production` 時請搭配更嚴格的 CORS/CSP 設定
 
-在 Windows 永久設定環境變數：
+你也可以不使用 `.env`，直接在 Windows 設定環境變數：
 
 ```powershell
 setx AGENT_PIN "0000"

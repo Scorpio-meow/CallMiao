@@ -8,6 +8,8 @@ const dayjs = require('dayjs');
 const QRCode = require('qrcode');
 const Database = require('better-sqlite3');
 const bcrypt = require('bcryptjs');
+// Load environment variables from .env
+require('dotenv').config();
 
 const PORT = process.env.PORT || 3000;
 // AGENT_PIN must be provided via environment variable for security
