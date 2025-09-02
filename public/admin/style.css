@@ -16,6 +16,9 @@ button.danger{background:#dc2626}
 .notice.ok{background:#ecfdf5;color:#065f46}
 .notice.error{background:#fff1f2;color:#991b1b}
 .hidden{display:none}
+.readonly-info{background:#f8f9fa;border:1px solid #e9ecef;border-radius:6px;padding:12px;margin-top:8px}
+.readonly-info div{margin:4px 0}
+.readonly-info strong{color:#495057}
 
 /* utilities */
 .flex-between-center{display:flex;justify-content:space-between;align-items:center}

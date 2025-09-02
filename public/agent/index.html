@@ -50,9 +50,9 @@
                     <input id="serviceTimeField" readonly placeholder="—" />
                 </div>
                 <div class="info-field smallctrl">
-                    <label>櫃台號（必填）</label>
+                    <label>櫃台號（由管理員設定）</label>
                     <div class="counter-group">
-                        <input id="counter" placeholder="1" />
+                        <input id="counter" placeholder="1" readonly />
                     </div>
                 </div>
             </div>
@@ -201,9 +201,21 @@
 
         function updateAgentNameUI() { $('#agentNameDisplay').textContent = agentName || '—'; }
 
+        function initializeCounterDisplay() {
+            const savedCounter = sessionStorage.getItem('agent_counter') || '';
+            const counterEl = document.querySelector('#counter');
+            if (counterEl) {
+                counterEl.value = savedCounter || '';
+                if (!savedCounter) {
+                    counterEl.placeholder = '未設定（請聯絡管理員）';
+                }
+            }
+        }
+
         if (savedCounter) { const c = document.querySelector('#counter'); if (c && !c.value) c.value = savedCounter; }
         if (agentName) document.querySelector('#authStatus').textContent = '已登入';
         updateAgentNameUI();
+        initializeCounterDisplay();
 
         // overlay login
         function showOverlay() { document.querySelector('#authOverlay').classList.remove('hidden'); }
@@ -221,7 +233,8 @@
             agentName = nm; savedCounter = ctr;
             if (agentName) sessionStorage.setItem('agent_name', agentName);
             if (savedCounter) sessionStorage.setItem('agent_counter', savedCounter);
-            if (savedCounter) { const c = document.querySelector('#counter'); if (c) c.value = savedCounter; }
+            // Update the counter display
+            initializeCounterDisplay();
             document.querySelector('#authStatus').textContent = '已登入';
             updateAgentNameUI();
             hideOverlay();
@@ -232,6 +245,12 @@
             sessionStorage.removeItem('agent_counter');
             document.querySelector('#authStatus').textContent = '';
             updateAgentNameUI();
+            // Clear counter display
+            const counterEl = document.querySelector('#counter');
+            if (counterEl) {
+                counterEl.value = '';
+                counterEl.placeholder = '未設定（請聯絡管理員）';
+            }
             // After logout, send user back to the login page handled by /public/login
             window.location.href = '/login/index.html';
         };
@@ -474,7 +493,7 @@
         $('#callNext').onclick = async () => {
             const serviceType = $('#serviceType').value;
             const counter = ($('#counter').value || '').trim();
-            if (!counter) { alert('請先輸入櫃台號'); return; }
+            if (!counter) { alert('櫃台號未設定，請聯絡管理員設定您的櫃台號'); return; }
             const res = await apiFetch('/api/agent/callNext', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -569,6 +588,28 @@
             await refresh();
         };
 
+        $('#cancel').onclick = async () => {
+            const id = $('#ticketInternalId').value;
+            if (!id) { alert('請選取一筆叫號'); return; }
+            const reason = prompt('取消原因（備註，可留空）') || undefined;
+            if (!confirm(`確定要取消此叫號嗎？`)) return;
+            const res = await apiFetch('/api/agent/cancel', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ticketId: Number(id), reason })
+            });
+            const data = await res.json();
+            if (data.error) { 
+                toast(data.error, 'error'); 
+            } else { 
+                toast(`已取消 ${data.ticket.number}`, 'success'); 
+                document.querySelector('#ticketId').value = ''; 
+                document.querySelector('#ticketInternalId').value = ''; 
+                setSelectedInfo(null); 
+            }
+            await refresh();
+        };
+
         $('#recall').onclick = async () => {
             const id = $('#ticketInternalId').value; if (!id) { alert('請選取一筆叫號'); return; }
             const res = await apiFetch('/api/agent/recall', {
@@ -606,7 +647,7 @@
         $('#callSpecific').onclick = async () => {
             const id = $('#ticketInternalId').value; if (!id) { alert('請選取一筆叫號或輸入 ticketId'); return; }
             const counter = ($('#counter').value || '').trim();
-            if (!counter) { alert('請先輸入櫃台號'); return; }
+            if (!counter) { alert('櫃台號未設定，請聯絡管理員設定您的櫃台號'); return; }
             const res = await apiFetch('/api/agent/callSpecific', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ticketId: Number(id), counter })
@@ -669,7 +710,7 @@
         $('#internalCall').onclick = async () => {
             const id = $('#ticketInternalId').value; if (!id) { alert('請選擇一筆叫號或輸入 ticketId'); return; }
             const counter = ($('#counter').value || '').trim();
-            if (!counter) { alert('請先輸入櫃台號'); return; }
+            if (!counter) { alert('櫃台號未設定，請聯絡管理員設定您的櫃台號'); return; }
             const res = await apiFetch('/api/agent/callSpecific', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ticketId: Number(id), counter, internal: true })
@@ -759,26 +800,16 @@
             if (e.key === 'n' || e.key === 'N') { e.preventDefault(); document.querySelector('#callNext').click(); }
             if (e.key === 's' || e.key === 'S') { e.preventDefault(); document.querySelector('#markServing').click(); }
             if (e.key === 'f' || e.key === 'F') { e.preventDefault(); document.querySelector('#finish').click(); }
+            if (e.key === 'x' || e.key === 'X') { e.preventDefault(); document.querySelector('#cancel').click(); }
         });
 
         // open second screen
         document.querySelector('#openSecondScreen').onclick = () => { window.open('/lobby/index.html', '_blank'); };
 
-        // persist counter change and update socket rooms
+        // Counter is now read-only and set by admin via login system
+        // Socket room management is handled during login/logout
         const counterEl = document.querySelector('#counter');
-        if (counterEl) {
-            counterEl.addEventListener('change', (ev) => {
-                const v = (ev.target && ev.target.value) ? String(ev.target.value).trim() : '';
-                const old = sessionStorage.getItem('agent_counter') || '';
-                sessionStorage.setItem('agent_counter', v);
-                try {
-                    if (socket && socket.connected) {
-                        if (old) socket.emit('leave', `counter:${old}`);
-                        if (v) socket.emit('join', `counter:${v}`);
-                    }
-                } catch (e) { /* noop */ }
-            });
-        }
+        // Counter field is read-only, no manual changes allowed
 
         // no initServiceButtons needed when service buttons are not rendered here
     </script>

@@ -89,6 +89,15 @@ setx AGENT_PIN "0000"
 2) 先呼叫 POST `/api/admin/csrf` 取得 `{ csrfToken }`
 3) 後續在瀏覽器來源（Origin 在 ALLOWED_ORIGINS 內）呼叫 `/api/agents` 的 POST/PUT/DELETE 時，加上 Header `x-csrf-token: <csrfToken>`
 
+### 櫃台號管理重要說明
+
+**櫃台號只能透過管理端設定，櫃員端無法自行修改**：
+
+- 管理員在 `/admin/agents.html` 建立或編輯櫃員帳號時設定櫃台號
+- 櫃員登入後，系統自動從帳號資料中載入櫃台號
+- 櫃員端的櫃台號欄位為唯讀，不可手動更改
+- 如需變更櫃台號，須聯絡管理員透過管理介面修改
+
 PowerShell 範例（建立帳號）：
 
 ```powershell

@@ -250,7 +250,7 @@ app.post('/api/login', loginLimiter, (req, res) => {
   if (!user) return res.status(401).json({ error: 'invalid credentials' });
   const ok = (user.password && password) ? bcrypt.compareSync(String(password), String(user.password)) : false;
   if (!ok) return res.status(401).json({ error: 'invalid credentials' });
-  return res.json({ ok: true, agent: { id: user.id, account: user.account, name: user.name, counter: user.counter } });
+  return res.json({ ok: true, agent: { id: user.id, account: user.account, name: user.name, counter: user.counter, role: user.role } });
 });
 
 // Issue a CSRF token for admin UI; requires valid x-agent-pin header (requirePin middleware)
@@ -424,6 +424,34 @@ function requirePin(req, res, next) {
   // Enforce header PIN only; remove name-based bypass
   const pin = req.get('x-agent-pin');
   if (!AGENT_PIN || pin !== AGENT_PIN) return res.status(401).json({ error: 'unauthorized' });
+  next();
+}
+
+function requireAgentAuth(req, res, next) {
+  // Check for either admin PIN or valid agent authentication
+  const pin = req.get('x-agent-pin');
+  const agentAccount = req.get('x-agent-account');
+  const agentName = req.get('x-agent-name');
+  
+  // If admin PIN is provided, allow access
+  if (AGENT_PIN && pin === AGENT_PIN) {
+    return next();
+  }
+  
+  // Otherwise, require agent authentication
+  if (!agentAccount || !agentName) {
+    return res.status(401).json({ error: 'unauthorized - missing agent credentials' });
+  }
+  
+  // Verify agent exists and is active
+  const decodedName = decodeURIComponent(agentName);
+  const agent = db.prepare('SELECT * FROM agents WHERE account=? AND name=? AND active=1').get(agentAccount, decodedName);
+  if (!agent) {
+    return res.status(401).json({ error: 'unauthorized - invalid agent credentials' });
+  }
+  
+  // Store agent info for use in route handler
+  req.authenticatedAgent = agent;
   next();
 }
 
@@ -631,6 +659,48 @@ app.post('/api/agent/message', requirePin, (req, res) => {
     console.error('agent message error', err);
     res.status(500).json({ error: 'message send failed' });
   }
+});
+
+// Agent profile management: get current agent's info by account from header
+app.get('/api/agent/profile', requireAgentAuth, (req, res) => {
+  // Use the authenticated agent from middleware
+  const agent = req.authenticatedAgent;
+  
+  // Return safe agent data (exclude password)
+  const safeAgent = {
+    id: agent.id,
+    account: agent.account,
+    name: agent.name,
+    counter: agent.counter,
+    role: agent.role,
+    active: agent.active,
+    createdAt: agent.createdAt,
+    updatedAt: agent.updatedAt
+  };
+  
+  res.json({ agent: safeAgent });
+});
+
+// Agent profile management: update current agent's info (limited fields)
+app.put('/api/agent/profile', requireAgentAuth, (req, res) => {
+  const agent = req.authenticatedAgent;
+  const { name, password, counter } = req.body || {};
+  const now = dayjs().toISOString();
+  
+  // Agents can update their name, password, and counter
+  let hash = agent.password;
+  if (password) {
+    hash = bcrypt.hashSync(String(password), 10);
+  }
+  
+  const updateName = name || agent.name;
+  const updateCounter = counter || agent.counter;
+  
+  db.prepare('UPDATE agents SET name=?, password=?, counter=?, updatedAt=? WHERE id=?')
+    .run(updateName, hash, updateCounter, now, agent.id);
+  
+  const updated = db.prepare('SELECT id, account, name, counter, role, active, createdAt, updatedAt FROM agents WHERE id=?').get(agent.id);
+  res.json({ agent: updated });
 });
 
 app.get('/api/qrcode', qrcodeLimiter, async (req, res) => {

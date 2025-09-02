@@ -33,6 +33,7 @@ button{padding:8px 12px;border-radius:8px}
 .info-field label{display:block;font-size:12px;color:#6b7280;margin-bottom:4px}
 .info-field input{width:100%;background:#f8fafc}
 .info-field.smallctrl input{background:#fff}
+.info-field input[readonly]{background:#f3f4f6;color:#6b7280;cursor:not-allowed;border-color:#e5e7eb}
 
 .stats-box{display:flex;gap:12px}
 .stat{background:#fff0f0;border:1px solid #fecaca;border-radius:10px;padding:10px 12px;min-width:160px}

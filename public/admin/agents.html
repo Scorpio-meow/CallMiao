@@ -10,40 +10,71 @@
 
 <body>
   <div class="card">
-    <h1>帳號管理（需輸入管理 PIN）</h1>
-    <div id="pinArea">
-      <label for="adminPin">管理 PIN</label>
-      <div class="row">
-        <input id="adminPin" placeholder="輸入 PIN" />
-        <button id="savePin">儲存並載入</button>
-      </div>
-  <p class="muted">PIN 僅暫存於此頁記憶體，不會寫入瀏覽器儲存；重新整理或關閉分頁後需再輸入。</p>
+    <h1 id="pageTitle">帳號管理</h1>
+    
+    <!-- Login redirect message -->
+    <div id="loginRedirect">
+      <p>正在重定向到登入頁面...</p>
+      <p class="muted">如果沒有自動跳轉，請<a href="/login/index.html">點擊這裡</a>手動登入</p>
     </div>
 
     <div id="mainArea" class="hidden">
       <div class="flex-between-center">
-        <strong>已登入為管理員</strong>
+        <strong id="loginStatus">已登入</strong>
         <div class="actions">
           <button id="logout" class="small">登出</button>
         </div>
       </div>
 
-      <div class="mt-12">
-        <h3>建立新帳號</h3>
-        <label for="newAccount">帳號 (account)</label>
-        <input id="newAccount" placeholder="輸入帳號" />
-        <label for="newName">姓名 (name)</label>
-        <input id="newName" placeholder="輸入姓名（可留空）" />
-        <div class="row">
-          <div><label for="newPassword">密碼</label><input id="newPassword" type="password" placeholder="輸入密碼" /></div>
-          <div><label for="newCounter">櫃台（必填）</label><input id="newCounter" placeholder="例如 1" /></div>
+      <!-- Admin-only sections -->
+      <div id="adminSection" class="hidden">
+        <div class="mt-12">
+          <h3>建立新帳號</h3>
+          <label for="newAccount">帳號 (account)</label>
+          <input id="newAccount" placeholder="輸入帳號" />
+          <label for="newName">姓名 (name)</label>
+          <input id="newName" placeholder="輸入姓名（可留空）" />
+          <div class="row">
+            <div><label for="newPassword">密碼</label><input id="newPassword" type="password" placeholder="輸入密碼" /></div>
+            <div><label for="newCounter">櫃台（必填）</label><input id="newCounter" placeholder="例如 1" /></div>
+            <div><label for="newRole">角色</label>
+              <select id="newRole">
+                <option value="">一般櫃員</option>
+                <option value="admin">管理員</option>
+              </select>
+            </div>
+          </div>
+          <div class="mt-8"><button id="createBtn">建立</button></div>
         </div>
-        <div class="mt-8"><button id="createBtn">建立</button></div>
+
+        <div class="mt-18">
+          <h3>現有帳號</h3>
+          <div id="agentsWrap">載入中…</div>
+        </div>
       </div>
 
-      <div class="mt-18">
-        <h3>現有帳號</h3>
-        <div id="agentsWrap">載入中…</div>
+      <!-- Agent profile section -->
+      <div id="profileSection" class="hidden">
+        <div class="mt-12">
+          <h3>個人資料</h3>
+          <label for="profileName">姓名</label>
+          <input id="profileName" placeholder="輸入姓名" />
+          <label for="profileCounter">櫃台號碼</label>
+          <input id="profileCounter" type="number" placeholder="輸入櫃台號碼" />
+          <label for="profilePassword">新密碼（留空表示不更改）</label>
+          <input id="profilePassword" type="password" placeholder="輸入新密碼" />
+          <div class="mt-8">
+            <button id="updateProfileBtn">更新個人資料</button>
+          </div>
+          
+          <div class="mt-12">
+            <h4>帳號資訊（只讀）</h4>
+            <div class="readonly-info">
+              <div><strong>帳號：</strong><span id="profileAccount">-</span></div>
+              <div><strong>角色：</strong><span id="profileRole">-</span></div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -51,6 +82,13 @@
   </div>
 
   <script>
+    // Check user role and initialize appropriate interface
+    let USER_MODE = 'agent'; // 'admin' or 'agent'
+    let CURRENT_AGENT = null;
+    
+    // Use the PIN from environment variable (same as櫃員端)
+    const ADMIN_PIN = '0000'; // This should match your .env AGENT_PIN
+
     function showMsg(text, err) {
       const el = document.getElementById('msg');
       el.textContent = text;
@@ -60,20 +98,70 @@
       setTimeout(() => el.classList.add('hidden'), 4000);
     }
 
-  // memory-only PIN/CSRF for this tab only
-  let ADMIN_PIN_MEM = null;
-  let ADMIN_CSRF_MEM = null;
-  function getPin() { return ADMIN_PIN_MEM; }
-  function setPin(v) { ADMIN_PIN_MEM = v || null; }
-  function getCsrf() { return ADMIN_CSRF_MEM; }
-  function setCsrf(v) { ADMIN_CSRF_MEM = v || null; }
+    // Check if user is logged in and has appropriate permissions
+    function checkLoginAndPermissions() {
+      const agentName = sessionStorage.getItem('agent_name');
+      const agentRole = sessionStorage.getItem('agent_role');
+      const agentAccount = sessionStorage.getItem('agent_account');
+      
+      if (!agentName || !agentAccount) {
+        // Not logged in, redirect to login page
+        // Use pathname + search + hash to avoid full URL issues in DevTunnel environments
+        const redirect = encodeURIComponent(location.pathname + location.search + location.hash);
+        console.log('Admin redirect - original location:', location.href);
+        console.log('Admin redirect - pathname:', location.pathname);
+        console.log('Admin redirect - encoded redirect:', redirect);
+        const redirectUrl = `/login/index.html?redirect=${redirect}`;
+        console.log('Admin redirect - final URL:', redirectUrl);
+        window.location.href = redirectUrl;
+        return false;
+      }
+      
+      // User is logged in, determine what they can access
+      if (agentRole === 'admin') {
+        USER_MODE = 'admin';
+        initializeAdminInterface();
+      } else {
+        USER_MODE = 'agent';
+        initializeAgentInterface();
+      }
+      
+      return true;
+    }
 
     async function apiFetch(url, opts = {}) {
       opts = Object.assign({ headers: {} }, opts);
-      const pin = getPin(); if (pin) opts.headers['x-agent-pin'] = pin;
-      const csrf = getCsrf(); if (csrf) opts.headers['x-csrf-token'] = csrf;
+      
+      // For admin operations, use ADMIN_PIN
+      if (sessionStorage.getItem('agent_role') === 'admin') {
+        opts.headers['x-agent-pin'] = ADMIN_PIN;
+      }
+      
       if (!opts.headers['Content-Type']) opts.headers['Content-Type'] = 'application/json';
+      
+      // Add agent authentication for agent profile API
+      const agentAccount = sessionStorage.getItem('agent_account');
+      const agentName = sessionStorage.getItem('agent_name');
+      if (agentAccount && url.includes('/api/agent/')) {
+        opts.headers['x-agent-account'] = agentAccount;
+        opts.headers['x-agent-name'] = encodeURIComponent(agentName);
+      }
+      
       return fetch(url, opts);
+    }
+
+    async function getCsrfToken() {
+      try {
+        const res = await fetch('/api/admin/csrf', { 
+          method: 'POST', 
+          headers: { 'x-agent-pin': ADMIN_PIN } 
+        });
+        const data = await res.json();
+        return data.csrfToken;
+      } catch (err) {
+        console.error('Failed to get CSRF token:', err);
+        return null;
+      }
     }
 
     async function loadAgents() {
@@ -95,17 +183,49 @@
       } catch (err) { wrap.innerHTML = `<div class="muted">載入失敗</div>`; console.error(err); }
     }
 
+    async function loadAgentProfile() {
+      try {
+        const res = await apiFetch('/api/agent/profile', { method: 'GET' });
+        const data = await res.json();
+        if (data.error) return showMsg('載入個人資料失敗: ' + data.error, true);
+        
+        CURRENT_AGENT = data.agent;
+        document.getElementById('profileName').value = data.agent.name || '';
+        document.getElementById('profileCounter').value = data.agent.counter || '';
+        document.getElementById('profileAccount').textContent = data.agent.account || '-';
+        document.getElementById('profileRole').textContent = data.agent.role === 'admin' ? '管理員' : '一般櫃員';
+      } catch (err) {
+        console.error(err);
+        showMsg('載入個人資料失敗', true);
+      }
+    }
+
     async function onEdit(e) {
       const id = e.currentTarget.getAttribute('data-id');
       const name = prompt('新姓名 (留空不變)');
       const password = prompt('新密碼 (留空不變)');
       const counter = prompt('櫃台 (留空不變)');
+      const role = prompt('角色 (admin/留空為一般櫃員)');
       const body = {};
       if (name) body.name = name;
       if (password) body.password = password;
       if (counter) body.counter = counter;
+      if (role !== null) body.role = role || '';
+      
       try {
-        const res = await apiFetch(`/api/agents/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+        // Get CSRF token for admin operations
+        const csrfToken = await getCsrfToken();
+        if (!csrfToken) return showMsg('無法取得 CSRF token', true);
+        
+        const res = await fetch(`/api/agents/${id}`, { 
+          method: 'PUT', 
+          headers: {
+            'Content-Type': 'application/json',
+            'x-agent-pin': ADMIN_PIN,
+            'x-csrf-token': csrfToken
+          },
+          body: JSON.stringify(body) 
+        });
         const data = await res.json();
         if (data.error) return showMsg('修改失敗: ' + data.error, true);
         showMsg('已修改');
@@ -117,51 +237,127 @@
       const id = e.currentTarget.getAttribute('data-id');
       if (!confirm('確定刪除？')) return;
       try {
-        const res = await apiFetch(`/api/agents/${id}`, { method: 'DELETE' });
+        // Get CSRF token for admin operations
+        const csrfToken = await getCsrfToken();
+        if (!csrfToken) return showMsg('無法取得 CSRF token', true);
+        
+        const res = await fetch(`/api/agents/${id}`, { 
+          method: 'DELETE',
+          headers: {
+            'x-agent-pin': ADMIN_PIN,
+            'x-csrf-token': csrfToken
+          }
+        });
         const data = await res.json();
         if (data.error) return showMsg('刪除失敗: ' + data.error, true);
-        showMsg('已刪除'); loadAgents();
+        showMsg('已刪除'); 
+        loadAgents();
       } catch (err) { showMsg('刪除失敗', true); }
     }
 
-    document.getElementById('savePin').onclick = () => {
-      const v = document.getElementById('adminPin').value.trim();
-      if (!v) { showMsg('請輸入 PIN', true); return; }
-      setPin(v);
-      // request CSRF token then show UI
-      fetch('/api/admin/csrf', { method: 'POST', headers: { 'x-agent-pin': v } })
-        .then(r => r.json())
-        .then(j => {
-          if (j && j.csrfToken) { setCsrf(j.csrfToken); document.getElementById('pinArea').classList.add('hidden'); document.getElementById('mainArea').classList.remove('hidden'); loadAgents(); }
-          else { showMsg('取得 CSRF token 失敗', true); }
-        }).catch(e => { console.error(e); showMsg('取得 CSRF token 失敗', true); });
-    };
+    function initializeAdminInterface() {
+      document.getElementById('loginRedirect').classList.add('hidden');
+      document.getElementById('mainArea').classList.remove('hidden');
+      document.getElementById('adminSection').classList.remove('hidden');
+      document.getElementById('profileSection').classList.add('hidden');
+      document.getElementById('pageTitle').textContent = '帳號管理（管理員）';
+      document.getElementById('loginStatus').textContent = `已登入為管理員 - ${sessionStorage.getItem('agent_name')}`;
+      loadAgents();
+    }
 
-    document.getElementById('logout').onclick = () => {
-      setPin(null);
-      setCsrf(null);
-      document.getElementById('pinArea').classList.remove('hidden');
-      document.getElementById('mainArea').classList.add('hidden');
-    };
+    function initializeAgentInterface() {
+      document.getElementById('loginRedirect').classList.add('hidden');
+      document.getElementById('mainArea').classList.remove('hidden');
+      document.getElementById('adminSection').classList.add('hidden');
+      document.getElementById('profileSection').classList.remove('hidden');
+      document.getElementById('pageTitle').textContent = '個人資料管理';
+      document.getElementById('loginStatus').textContent = `已登入為櫃員 - ${sessionStorage.getItem('agent_name')}`;
+      loadAgentProfile();
+    }
+
+    // Logout function
+    function logout() {
+      sessionStorage.removeItem('agent_name');
+      sessionStorage.removeItem('agent_account');
+      sessionStorage.removeItem('agent_counter');
+      sessionStorage.removeItem('agent_role');
+      sessionStorage.removeItem('agent_id');
+      window.location.href = '/login/index.html';
+    }
+
+    // Event handlers
+    document.getElementById('logout').onclick = logout;
 
     document.getElementById('createBtn').onclick = async () => {
       const account = document.getElementById('newAccount').value.trim();
       const name = document.getElementById('newName').value.trim();
       const password = document.getElementById('newPassword').value;
       const counter = document.getElementById('newCounter').value.trim();
+      const role = document.getElementById('newRole').value;
       if (!account || !password) return showMsg('account & password required', true);
       if (!counter) return showMsg('counter required', true);
+      
       try {
-        const res = await apiFetch('/api/agents', { method: 'POST', body: JSON.stringify({ account, name, password, counter }) });
+        // Get CSRF token for admin operations
+        const csrfToken = await getCsrfToken();
+        if (!csrfToken) return showMsg('無法取得 CSRF token', true);
+        
+        const res = await fetch('/api/agents', { 
+          method: 'POST', 
+          headers: {
+            'Content-Type': 'application/json',
+            'x-agent-pin': ADMIN_PIN,
+            'x-csrf-token': csrfToken
+          },
+          body: JSON.stringify({ account, name, password, counter, role }) 
+        });
         const data = await res.json();
         if (data.error) return showMsg('建立失敗: ' + data.error, true);
         showMsg('建立成功');
-        document.getElementById('newAccount').value = ''; document.getElementById('newName').value = ''; document.getElementById('newPassword').value = ''; document.getElementById('newCounter').value = '';
+        document.getElementById('newAccount').value = ''; 
+        document.getElementById('newName').value = ''; 
+        document.getElementById('newPassword').value = ''; 
+        document.getElementById('newCounter').value = '';
+        document.getElementById('newRole').value = '';
         loadAgents();
       } catch (err) { showMsg('建立失敗', true); }
     };
 
-  // no auto-restore; require PIN input every refresh
+    document.getElementById('updateProfileBtn').onclick = async () => {
+      const name = document.getElementById('profileName').value.trim();
+      const counter = document.getElementById('profileCounter').value.trim();
+      const password = document.getElementById('profilePassword').value;
+      const body = {};
+      
+      if (name !== (CURRENT_AGENT?.name || '')) body.name = name;
+      if (counter !== (CURRENT_AGENT?.counter || '')) body.counter = counter;
+      if (password) body.password = password;
+      
+      if (Object.keys(body).length === 0) return showMsg('沒有變更', true);
+      
+      try {
+        const res = await apiFetch('/api/agent/profile', { method: 'PUT', body: JSON.stringify(body) });
+        const data = await res.json();
+        if (data.error) return showMsg('更新失敗: ' + data.error, true);
+        showMsg('更新成功');
+        document.getElementById('profilePassword').value = '';
+        
+        // Update session storage if data changed
+        if (body.name) {
+          sessionStorage.setItem('agent_name', body.name);
+        }
+        if (body.counter) {
+          sessionStorage.setItem('agent_counter', body.counter);
+        }
+        
+        loadAgentProfile();
+      } catch (err) { showMsg('更新失敗', true); }
+    };
+
+    // Initialize the page
+    window.addEventListener('load', () => {
+      checkLoginAndPermissions();
+    });
   </script>
 </body>
 

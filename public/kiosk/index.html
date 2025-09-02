@@ -60,7 +60,24 @@
         <div class="modal-card">
             <h3 id="modalTitle">取號</h3>
             <label>電話號碼（必填）</label>
-            <input id="phone" placeholder="0900-000-000" inputmode="numeric" required />
+            <input id="phone" placeholder="0900-000-000" inputmode="numeric" required readonly />
+            
+            <!-- Digital Keypad -->
+            <div class="digital-keypad">
+                <button type="button" class="key-btn" data-digit="1">1</button>
+                <button type="button" class="key-btn" data-digit="2">2</button>
+                <button type="button" class="key-btn" data-digit="3">3</button>
+                <button type="button" class="key-btn" data-digit="4">4</button>
+                <button type="button" class="key-btn" data-digit="5">5</button>
+                <button type="button" class="key-btn" data-digit="6">6</button>
+                <button type="button" class="key-btn" data-digit="7">7</button>
+                <button type="button" class="key-btn" data-digit="8">8</button>
+                <button type="button" class="key-btn" data-digit="9">9</button>
+                <button type="button" class="key-btn key-clear" id="clearPhone">清除</button>
+                <button type="button" class="key-btn" data-digit="0">0</button>
+                <button type="button" class="key-btn key-backspace" id="backspacePhone">⌫</button>
+            </div>
+            
             <div class="actions">
                 <button id="cancelModal" class="btn">取消</button>
                 <button id="confirmModal" class="btn btn-primary">確定取號</button>
@@ -116,13 +133,98 @@
                 selectedService = c.getAttribute('data-service');
                 setActiveService(selectedService);
                 $('#modalTitle').textContent = `取號：${SERVICE_NAMES[selectedService] || selectedService}`;
-                $('#phone').value = '';
+                $('#phone').value = ''; // Clear phone input when opening modal
                 $('#phoneModal').classList.remove('hidden');
             };
         });
 
         $('#cancelModal').onclick = () => $('#phoneModal').classList.add('hidden');
-    $('#phone').addEventListener('input', (e) => { e.target.value = onlyDigits(e.target.value).slice(0, 15); });
+        
+        // Digital keypad functionality
+        function updatePhoneDisplay() {
+            const phoneInput = $('#phone');
+            const currentValue = phoneInput.value;
+            // Format phone number with dashes for display
+            const formatted = currentValue.replace(/(\d{4})(\d{3})(\d{3})/, '$1-$2-$3');
+            phoneInput.value = formatted;
+        }
+        
+        // Handle digit input
+        document.querySelectorAll('.key-btn[data-digit]').forEach(btn => {
+            btn.onclick = () => {
+                const digit = btn.getAttribute('data-digit');
+                const phoneInput = $('#phone');
+                const currentDigits = onlyDigits(phoneInput.value);
+                if (currentDigits.length < 15) { // Limit to 15 digits
+                    phoneInput.value = currentDigits + digit;
+                    updatePhoneDisplay();
+                    // Visual feedback for touch
+                    btn.style.transform = 'scale(0.95)';
+                    setTimeout(() => { btn.style.transform = ''; }, 150);
+                }
+            };
+            
+            // Touch event handlers for better mobile experience
+            btn.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                btn.style.transform = 'scale(0.95)';
+                btn.style.background = '#2563eb';
+                btn.style.color = '#fff';
+            });
+            
+            btn.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                setTimeout(() => {
+                    btn.style.transform = '';
+                    btn.style.background = '';
+                    btn.style.color = '';
+                }, 150);
+                btn.click();
+            });
+        });
+        
+        // Handle clear button
+        $('#clearPhone').onclick = () => {
+            $('#phone').value = '';
+            // Visual feedback
+            const btn = $('#clearPhone');
+            btn.style.transform = 'scale(0.95)';
+            setTimeout(() => { btn.style.transform = ''; }, 150);
+        };
+        
+        // Handle backspace button
+        $('#backspacePhone').onclick = () => {
+            const phoneInput = $('#phone');
+            const currentDigits = onlyDigits(phoneInput.value);
+            if (currentDigits.length > 0) {
+                phoneInput.value = currentDigits.slice(0, -1);
+                updatePhoneDisplay();
+            }
+            // Visual feedback
+            const btn = $('#backspacePhone');
+            btn.style.transform = 'scale(0.95)';
+            setTimeout(() => { btn.style.transform = ''; }, 150);
+        };
+        
+        // Add touch events for clear and backspace buttons
+        ['#clearPhone', '#backspacePhone'].forEach(selector => {
+            const btn = document.querySelector(selector);
+            if (btn) {
+                btn.addEventListener('touchstart', (e) => {
+                    e.preventDefault();
+                    btn.style.transform = 'scale(0.95)';
+                });
+                
+                btn.addEventListener('touchend', (e) => {
+                    e.preventDefault();
+                    setTimeout(() => { btn.style.transform = ''; }, 150);
+                    btn.click();
+                });
+            }
+        });
+
+        // Remove the old input event handler and replace with keypad-only input
+        // $('#phone').addEventListener('input', (e) => { e.target.value = onlyDigits(e.target.value).slice(0, 15); });
 
         // Confirm create ticket
         $('#confirmModal').onclick = async () => {
