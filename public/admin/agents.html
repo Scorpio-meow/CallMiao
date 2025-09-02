@@ -309,7 +309,6 @@
       const counter = document.getElementById('newCounter').value.trim();
       const role = document.getElementById('newRole').value;
       if (!account || !password) return showMsg('account & password required', true);
-      if (!counter) return showMsg('counter required', true);
       
       try {
         // Get CSRF token for admin operations
