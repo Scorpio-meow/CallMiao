@@ -44,6 +44,16 @@
     }
 
     // Voice selection and speak multiple parts in sequence.
+    // Format number to improve clarity & perceived loudness (read char-by-char)
+    function formatNumberForSpeak(s) {
+      try {
+        if (s == null) return '';
+        const str = String(s);
+        // Insert spaces between each character, e.g., A123 -> "A 1 2 3"
+        // This helps some TTS voices pronounce with more emphasis/clarity
+        return str.split('').join(' ');
+      } catch (_) { return String(s || ''); }
+    }
     let selectedVoice = null;
     function chooseVoice() {
       try {
@@ -59,7 +69,7 @@
       speechSynthesis.onvoiceschanged = chooseVoice;
     }
 
-    // Speak multiple parts. Each part may be a string or an object { text, volume, rate, pitch }
+  // Speak multiple parts. Each part may be a string or an object { text, volume, rate, pitch }
     function speakParts(parts) {
       try {
         if (!('speechSynthesis' in window)) return;
@@ -73,7 +83,11 @@
           const u = new SpeechSynthesisUtterance(text);
           u.lang = 'zh-TW';
           if (selectedVoice) u.voice = selectedVoice;
-          if (opts.volume !== undefined) u.volume = opts.volume; // 0.0 - 1.0
+          if (opts.volume !== undefined) {
+            // clamp to valid range
+            const v = Number(opts.volume);
+            u.volume = Math.max(0, Math.min(1, isFinite(v) ? v : 1));
+          }
           if (opts.rate !== undefined) u.rate = opts.rate; // default ~1
           if (opts.pitch !== undefined) u.pitch = opts.pitch; // default ~1
           u.onend = () => { i++; setTimeout(next, opts.pauseAfter || 80); };
@@ -125,12 +139,16 @@
         // fallback for counter and chain parts to ensure complete speech
         const counter = t.counter || '服務櫃台';
         console.info('call:made payload', { number: t.number, counter });
-        // emphasize number by speaking it twice (slightly different pitch/rate) to increase perceived loudness
+        // Emphasize number by:
+        // 1) speaking it twice
+        // 2) spacing characters (A 1 2 3) to increase clarity
+        // 3) using max volume=1.0 and a more natural pitch/rate that sounds louder to human ears
+        const numSpaced = formatNumberForSpeak(t.number);
         speakParts([
-          { text: '請號碼', volume: 0.95, rate: 0.90, pitch: 1.05, pauseAfter: 160 },
-          { text: String(t.number), volume: 10.0, rate: 0.80, pitch: 1.2, pauseAfter: 200 },
-          { text: String(t.number), volume: 10.0, rate: 0.87, pitch: 1.1, pauseAfter: 220 },
-          { text: `到 ${counter} 號櫃台`, volume: 0.9, rate: 0.90, pitch: 1.0, pauseAfter: 140 }
+          { text: '請號碼', volume: 1.0, rate: 0.95, pitch: 1.0, pauseAfter: 160 },
+          { text: numSpaced, volume: 1.0, rate: 0.95, pitch: 0.96, pauseAfter: 220 },
+          { text: numSpaced, volume: 1.0, rate: 0.98, pitch: 0.98, pauseAfter: 240 },
+          { text: `到 ${counter} 號櫃台`, volume: 0.98, rate: 0.96, pitch: 1.0, pauseAfter: 140 }
         ]);
 
       }

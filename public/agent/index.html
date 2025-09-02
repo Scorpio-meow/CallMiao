@@ -94,6 +94,7 @@
 
                 <div class="verify-line">
                     <input id="ticketId" placeholder="ticket number" />
+                    <button id="pickFromInput" class="btn btn-light">選取</button>
                     <input type="hidden" id="ticketInternalId" />
                     <input type="hidden" id="serviceType" value="A" />
                 </div>
@@ -332,6 +333,39 @@
             }
         }
 
+        // pick button next to ticketId input: find matching ticket by visible number or internal id
+        const pickBtn = document.querySelector('#pickFromInput');
+        if (pickBtn) {
+            pickBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                const vis = document.querySelector('#ticketId');
+                const hid = document.querySelector('#ticketInternalId');
+                const num = vis ? (vis.value || '').trim() : '';
+                if (!num) { alert('請先輸入或選取號碼'); return; }
+                // try to find a row in current list by data-number
+                const rowByNumber = document.querySelector(`[data-number="${CSS.escape(num)}"]`);
+                if (rowByNumber) {
+                    const id = rowByNumber.getAttribute('data-id') || '';
+                    if (hid) hid.value = id;
+                    if (vis) vis.value = num;
+                    // construct selected info from currentCalls if present
+                    const svc = rowByNumber.querySelector('.badge') ? rowByNumber.querySelector('.badge').textContent : '';
+                    setSelectedInfo({ number: num, counter: rowByNumber.querySelector('td:nth-child(2)') ? rowByNumber.querySelector('td:nth-child(2)').textContent.trim() : '-', phone: '' , serviceType: svc, id: id });
+                    return;
+                }
+                // fallback: if num looks numeric, try match by internal id
+                const possibleRowById = document.querySelector(`[data-id="${CSS.escape(num)}"]`);
+                if (possibleRowById) {
+                    const number = possibleRowById.getAttribute('data-number') || '';
+                    if (hid) hid.value = possibleRowById.getAttribute('data-id') || '';
+                    if (vis) vis.value = number;
+                    setSelectedInfo({ number: number, counter: possibleRowById.querySelector('td:nth-child(2)') ? possibleRowById.querySelector('td:nth-child(2)').textContent.trim() : '-', phone: '', id: possibleRowById.getAttribute('data-id') });
+                    return;
+                }
+                alert('找不到對應的叫號');
+            });
+        }
+
         async function refresh() {
             const res = await apiFetch('/api/overview');
             const data = await res.json();
@@ -447,7 +481,16 @@
                 body: JSON.stringify({ serviceType, counter })
             });
             const data = await res.json();
-            if (data.error) { toast(data.error, 'error'); } else { toast(`已叫號 ${data.ticket.number}`, 'success'); document.querySelector('#ticketInternalId').value = data.ticket.id; }
+            if (data.error) {
+                toast(data.error, 'error');
+            } else {
+                toast(`已叫號 ${data.ticket.number}`, 'success');
+                const vis = document.querySelector('#ticketId');
+                const hid = document.querySelector('#ticketInternalId');
+                if (vis) vis.value = data.ticket.number || '';
+                if (hid) hid.value = data.ticket.id || '';
+                try { setSelectedInfo({ number: data.ticket.number, counter: data.ticket.counter, phone: data.ticket.phone, id: data.ticket.id, serviceType: data.ticket.serviceType }); } catch (e) { /* noop */ }
+            }
             await refresh();
         };
 
@@ -533,19 +576,16 @@
                 body: JSON.stringify({ ticketId: Number(id) })
             });
             const data = await res.json();
-            if (data.error) { toast(data.error, 'error'); } else { toast(`重叫 ${data.ticket.number}`, 'success'); }
-            await refresh();
-        };
-
-        $('#cancel').onclick = async () => {
-            const id = $('#ticketInternalId').value; if (!id) { alert('請選取一筆叫號'); return; }
-            const reason = prompt('取消原因（可留空）') || undefined;
-            const res = await apiFetch('/api/agent/cancel', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ticketId: Number(id), reason })
-            });
-            const data = await res.json();
-            if (data.error) { toast(data.error, 'error'); } else { toast(`已取消 ${id}`, 'success'); }
+            if (data.error) {
+                toast(data.error, 'error');
+            } else {
+                toast(`重叫 ${data.ticket.number}`, 'success');
+                const vis = document.querySelector('#ticketId');
+                const hid = document.querySelector('#ticketInternalId');
+                if (vis) vis.value = data.ticket.number || '';
+                if (hid) hid.value = data.ticket.id || '';
+                try { setSelectedInfo({ number: data.ticket.number, counter: data.ticket.counter, phone: data.ticket.phone, id: data.ticket.id, serviceType: data.ticket.serviceType }); } catch (e) { /* noop */ }
+            }
             await refresh();
         };
 
@@ -572,7 +612,16 @@
                 body: JSON.stringify({ ticketId: Number(id), counter })
             });
             const data = await res.json();
-            if (data.error) { toast(data.error, 'error'); } else { toast(`指定叫號 ${data.ticket.number}`, 'success'); }
+            if (data.error) {
+                toast(data.error, 'error');
+            } else {
+                toast(`指定叫號 ${data.ticket.number}`, 'success');
+                const vis = document.querySelector('#ticketId');
+                const hid = document.querySelector('#ticketInternalId');
+                if (vis) vis.value = data.ticket.number || '';
+                if (hid) hid.value = data.ticket.id || '';
+                try { setSelectedInfo({ number: data.ticket.number, counter: data.ticket.counter, phone: data.ticket.phone, id: data.ticket.id, serviceType: data.ticket.serviceType }); } catch (e) { /* noop */ }
+            }
             await refresh();
         };
 
@@ -626,7 +675,16 @@
                 body: JSON.stringify({ ticketId: Number(id), counter, internal: true })
             });
             const data = await res.json();
-            if (data.error) { toast(data.error, 'error'); } else { toast(`內部叫號 ${data.ticket.number}`, 'success'); }
+            if (data.error) {
+                toast(data.error, 'error');
+            } else {
+                toast(`內部叫號 ${data.ticket.number}`, 'success');
+                const vis = document.querySelector('#ticketId');
+                const hid = document.querySelector('#ticketInternalId');
+                if (vis) vis.value = data.ticket.number || '';
+                if (hid) hid.value = data.ticket.id || '';
+                try { setSelectedInfo({ number: data.ticket.number, counter: data.ticket.counter, phone: data.ticket.phone, id: data.ticket.id, serviceType: data.ticket.serviceType }); } catch (e) { /* noop */ }
+            }
             await refresh();
         };
 

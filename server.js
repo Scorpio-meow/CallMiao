@@ -112,6 +112,9 @@ function getNextNumber(serviceType) {
 }
 
 const app = express();
+// Trust reverse proxy headers (needed for dev tunnels / reverse proxies)
+// This allows express-rate-limit to safely use X-Forwarded-For for client IP.
+app.set('trust proxy', 1);
 const server = http.createServer(app);
 const { Server } = require('socket.io');
 const io = new Server(server, { cors: { origin: ALLOWED_ORIGINS } });
@@ -443,6 +446,9 @@ app.post('/api/agent/callNext', requirePin, (req, res) => {
   if (!serviceType) return res.status(400).json({ error: 'serviceType is required' });
   const ctr = (counter === undefined || counter === null) ? '' : String(counter).trim();
   if (!ctr) return res.status(400).json({ error: 'counter is required' });
+  // Prevent same counter from calling multiple tickets at once
+  const busy = db.prepare("SELECT id FROM tickets WHERE counter=? AND status IN ('called','serving') LIMIT 1").get(ctr);
+  if (busy) return res.status(409).json({ error: 'counter busy', ticketId: busy.id });
   const ticket = db.prepare(`
     SELECT * FROM tickets
     WHERE serviceType=? AND status='waiting'
@@ -528,6 +534,12 @@ app.post('/api/agent/transfer', requirePin, (req, res) => {
   const status = keepStatus ? row.status : 'waiting';
   const calledAt = keepStatus ? row.calledAt : null;
   const counter = toCounter !== undefined ? toCounter : (keepStatus ? row.counter : null);
+  // If keeping status (e.g., remain 'called' or 'serving') and assigning a counter, ensure that counter is not already busy
+  if (keepStatus && counter) {
+    const ctr = String(counter);
+    const busy = db.prepare("SELECT id FROM tickets WHERE counter=? AND status IN ('called','serving') LIMIT 1").get(ctr);
+    if (busy && busy.id !== row.id) return res.status(409).json({ error: 'counter busy', ticketId: busy.id });
+  }
   db.prepare('UPDATE tickets SET serviceType=?, counter=?, status=?, calledAt=? WHERE id=?')
     .run(targetType, counter, status, calledAt, ticketId);
   const updated = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
@@ -566,6 +578,9 @@ app.post('/api/agent/callSpecific', requirePin, (req, res) => {
   if (!ticketId) return res.status(400).json({ error: 'ticketId is required' });
   const ctr = (counter === undefined || counter === null) ? '' : String(counter).trim();
   if (!ctr) return res.status(400).json({ error: 'counter is required' });
+  // Prevent same counter from calling multiple tickets at once; allow if busy ticket is the same one being called
+  const busy = db.prepare("SELECT id FROM tickets WHERE counter=? AND status IN ('called','serving') LIMIT 1").get(ctr);
+  if (busy && String(busy.id) !== String(ticketId)) return res.status(409).json({ error: 'counter busy', ticketId: busy.id });
   const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
   if (!row) return res.status(404).json({ error: 'not found' });
   const calledAt = dayjs().toISOString();
