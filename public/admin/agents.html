@@ -36,7 +36,7 @@
           <input id="newName" placeholder="輸入姓名（可留空）" />
           <div class="row">
             <div><label for="newPassword">密碼</label><input id="newPassword" type="password" placeholder="輸入密碼" /></div>
-            <div><label for="newCounter">櫃台（必填）</label><input id="newCounter" placeholder="例如 1" /></div>
+            <div><label for="newCounter">櫃台</label><input id="newCounter" placeholder="例如 A1, B2, 1號" /></div>
             <div><label for="newRole">角色</label>
               <select id="newRole">
                 <option value="">一般櫃員</option>
@@ -56,23 +56,25 @@
       <!-- Agent profile section -->
       <div id="profileSection" class="hidden">
         <div class="mt-12">
-          <h3>個人資料</h3>
+          <h3>個人資料編輯</h3>
           <label for="profileName">姓名</label>
           <input id="profileName" placeholder="輸入姓名" />
           <label for="profileCounter">櫃台號碼</label>
-          <input id="profileCounter" type="number" placeholder="輸入櫃台號碼" />
+          <input id="profileCounter" type="text" placeholder="例如 A1, B2, 1號" />
           <label for="profilePassword">新密碼（留空表示不更改）</label>
           <input id="profilePassword" type="password" placeholder="輸入新密碼" />
           <div class="mt-8">
             <button id="updateProfileBtn">更新個人資料</button>
           </div>
+        </div>
           
-          <div class="mt-12">
-            <h4>帳號資訊（只讀）</h4>
-            <div class="readonly-info">
-              <div><strong>帳號：</strong><span id="profileAccount">-</span></div>
-              <div><strong>角色：</strong><span id="profileRole">-</span></div>
-            </div>
+        <div class="mt-18">
+          <h3>帳號資訊</h3>
+          <div class="readonly-info">
+            <div><strong>角色：</strong><span id="profileRole">-</span></div>
+            <div><strong>帳號：</strong><span id="profileAccount">-</span></div>
+            <div><strong>姓名：</strong><span id="profileDisplayName">-</span></div>
+            <div><strong>櫃號：</strong><span id="profileDisplayCounter">-</span></div>
           </div>
         </div>
       </div>
@@ -190,10 +192,22 @@
         if (data.error) return showMsg('載入個人資料失敗: ' + data.error, true);
         
         CURRENT_AGENT = data.agent;
+        
+        // Fill editable fields
         document.getElementById('profileName').value = data.agent.name || '';
         document.getElementById('profileCounter').value = data.agent.counter || '';
-        document.getElementById('profileAccount').textContent = data.agent.account || '-';
+        
+        // Fill display information
         document.getElementById('profileRole').textContent = data.agent.role === 'admin' ? '管理員' : '一般櫃員';
+        document.getElementById('profileAccount').textContent = data.agent.account || '-';
+        document.getElementById('profileDisplayName').textContent = data.agent.name || '-';
+        document.getElementById('profileDisplayCounter').textContent = data.agent.counter || '-';
+        
+        // Update session storage to ensure consistency
+        sessionStorage.setItem('agent_name', data.agent.name || '');
+        sessionStorage.setItem('agent_counter', data.agent.counter || '');
+        sessionStorage.setItem('agent_role', data.agent.role || '');
+        sessionStorage.setItem('agent_account', data.agent.account || '');
       } catch (err) {
         console.error(err);
         showMsg('載入個人資料失敗', true);
@@ -350,6 +364,7 @@
           sessionStorage.setItem('agent_counter', body.counter);
         }
         
+        // Reload profile to sync all display information
         loadAgentProfile();
       } catch (err) { showMsg('更新失敗', true); }
     };

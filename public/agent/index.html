@@ -423,6 +423,30 @@
                     const num = tr.getAttribute('data-number') || '';
                     const vis = document.querySelector('#ticketId'); if (vis) vis.value = num || '';
                     const hid = document.querySelector('#ticketInternalId'); if (hid) hid.value = id || '';
+                    
+                    // Immediately update selected info with available data
+                    let ticketInfo = { number: num, id: id };
+                    
+                    // Try to get phone from waiting table if this is a waiting ticket
+                    if (tr.hasAttribute('data-waiting-id')) {
+                        const waitingTicket = waitingData.tickets?.find(t => t.id === Number(id));
+                        if (waitingTicket) {
+                            ticketInfo = { ...ticketInfo, phone: waitingTicket.phone, counter: waitingTicket.counter };
+                        }
+                    } else {
+                        // This is a current call, try to get info from currentCalls
+                        const currentCall = (data.currentCalls || []).find(c => c.id === Number(id));
+                        if (currentCall) {
+                            ticketInfo = { ...ticketInfo, counter: currentCall.counter, serviceType: currentCall.serviceType };
+                            // Try to get phone from waiting data as backup
+                            const waitingTicket = waitingData.tickets?.find(t => t.id === Number(id));
+                            if (waitingTicket && waitingTicket.phone) {
+                                ticketInfo.phone = waitingTicket.phone;
+                            }
+                        }
+                    }
+                    
+                    setSelectedInfo(ticketInfo);
                 };
             });
             document.querySelectorAll('button[data-pick]').forEach(btn => {
@@ -433,6 +457,20 @@
                     const num = row ? (row.getAttribute('data-number') || '') : '';
                     const vis = document.querySelector('#ticketId'); if (vis) vis.value = num || '';
                     const hid = document.querySelector('#ticketInternalId'); if (hid) hid.value = id || '';
+                    
+                    // Get detailed info and update selected info
+                    let ticketInfo = { number: num, id: id };
+                    const currentCall = (data.currentCalls || []).find(c => c.id === Number(id));
+                    if (currentCall) {
+                        ticketInfo = { ...ticketInfo, counter: currentCall.counter, serviceType: currentCall.serviceType };
+                        // Try to get phone from waiting data
+                        const waitingTicket = waitingData.tickets?.find(t => t.id === Number(id));
+                        if (waitingTicket && waitingTicket.phone) {
+                            ticketInfo.phone = waitingTicket.phone;
+                        }
+                    }
+                    
+                    setSelectedInfo(ticketInfo);
                 };
             });
 
@@ -443,9 +481,23 @@
             let cur = null;
             if (selId) {
                 cur = (data.currentCalls || []).find(x => x.id === selId);
+                // If currentCalls doesn't have phone info, try to get it from waitingData
+                if (cur && !cur.phone) {
+                    const waitingTicket = waitingData.tickets?.find(t => t.id === selId);
+                    if (waitingTicket && waitingTicket.phone) {
+                        cur = { ...cur, phone: waitingTicket.phone };
+                    }
+                }
             }
             if (!cur && visNum) {
                 cur = (data.currentCalls || []).find(x => String(x.number) === String(visNum));
+                // If currentCalls doesn't have phone info, try to get it from waitingData
+                if (cur && !cur.phone) {
+                    const waitingTicket = waitingData.tickets?.find(t => t.id === cur.id);
+                    if (waitingTicket && waitingTicket.phone) {
+                        cur = { ...cur, phone: waitingTicket.phone };
+                    }
+                }
             }
             setSelectedInfo(cur || null);
 
