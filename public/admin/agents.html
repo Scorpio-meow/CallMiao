@@ -6,6 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Agents 管理</title>
   <link rel="stylesheet" href="/admin/style.css" />
+  <script src="/utils/url-manager.js"></script>
 </head>
 
 <body>
@@ -88,6 +89,9 @@
     let USER_MODE = 'agent'; // 'admin' or 'agent'
     let CURRENT_AGENT = null;
     
+    // 使用 URL Manager
+    const urlManager = window.URLManager;
+    
     // Use the PIN from environment variable (same as櫃員端)
     const ADMIN_PIN = '0000'; // This should match your .env AGENT_PIN
 
@@ -101,21 +105,15 @@
     }
 
     // Check if user is logged in and has appropriate permissions
-    function checkLoginAndPermissions() {
+    async function checkLoginAndPermissions() {
       const agentName = sessionStorage.getItem('agent_name');
       const agentRole = sessionStorage.getItem('agent_role');
       const agentAccount = sessionStorage.getItem('agent_account');
       
       if (!agentName || !agentAccount) {
-        // Not logged in, redirect to login page
-        // Use pathname + search + hash to avoid full URL issues in DevTunnel environments
-        const redirect = encodeURIComponent(location.pathname + location.search + location.hash);
-        console.log('Admin redirect - original location:', location.href);
-        console.log('Admin redirect - pathname:', location.pathname);
-        console.log('Admin redirect - encoded redirect:', redirect);
-        const redirectUrl = `/login/index.html?redirect=${redirect}`;
-        console.log('Admin redirect - final URL:', redirectUrl);
-        window.location.href = redirectUrl;
+        // 使用 URL Manager 跳轉到登入頁面
+        console.log('Admin - 未登入，跳轉到登入頁面');
+        await urlManager.redirectToLogin();
         return false;
       }
       
@@ -290,13 +288,15 @@
     }
 
     // Logout function
-    function logout() {
+    async function logout() {
       sessionStorage.removeItem('agent_name');
       sessionStorage.removeItem('agent_account');
       sessionStorage.removeItem('agent_counter');
       sessionStorage.removeItem('agent_role');
       sessionStorage.removeItem('agent_id');
-      window.location.href = '/login/index.html';
+      
+      // 使用 URL Manager 跳轉到登入頁面
+      await urlManager.safeRedirect('/login/index.html');
     }
 
     // Event handlers
@@ -369,8 +369,8 @@
     };
 
     // Initialize the page
-    window.addEventListener('load', () => {
-      checkLoginAndPermissions();
+    window.addEventListener('load', async () => {
+      await checkLoginAndPermissions();
     });
   </script>
 </body>

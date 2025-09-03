@@ -353,11 +353,55 @@ function inferPublicOrigin(req) {
   return `${proto}://${host}`;
 }
 
+// 檢查目前環境類型
+function detectEnvironment(req) {
+  const host = req.get('host') || `localhost:${PORT}`;
+  const hostname = host.split(':')[0];
+  
+  const env = {
+    isLocal: false,
+    isDevTunnel: false,
+    isProduction: false,
+    hostname,
+    port: PORT,
+    nodeEnv: process.env.NODE_ENV || 'development'
+  };
+
+  // 檢查是否為本地環境
+  if (hostname === 'localhost' || hostname === '127.0.0.1' || 
+      hostname.startsWith('192.168.') || hostname.startsWith('10.')) {
+    env.isLocal = true;
+  }
+  
+  // 檢查是否為 DevTunnel
+  if (hostname.includes('devtunnels.ms')) {
+    env.isDevTunnel = true;
+  }
+  
+  // 檢查是否為正式環境
+  if (!env.isLocal && !env.isDevTunnel) {
+    env.isProduction = true;
+  }
+
+  return env;
+}
+
 app.get('/api/config', (req, res) => {
   try {
     const publicOrigin = inferPublicOrigin(req);
-    res.json({ publicOrigin });
+    const environment = detectEnvironment(req);
+    
+    res.json({ 
+      publicOrigin,
+      environment,
+      allowedOrigins: ALLOWED_ORIGINS,
+      features: {
+        autoRedirect: true,
+        smartUrlDetection: true
+      }
+    });
   } catch (err) {
+    console.error('Config API error:', err);
     res.status(500).json({ error: 'config error' });
   }
 });

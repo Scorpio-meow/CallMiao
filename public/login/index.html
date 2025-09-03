@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>數位叫號多媒體管理系統 - 登入</title>
   <link rel="stylesheet" href="/login/style.css"/>
+  <script src="/utils/url-manager.js"></script>
 </head>
 <body>
   <div class="page">
@@ -35,10 +36,14 @@
 
   <script>
     const $ = (s)=>document.querySelector(s);
-  let captchaToken = null;
-  // read optional redirect from querystring; defaults to agent page
-  const params = new URLSearchParams(location.search);
-  const redirectTo = params.get('redirect') || '/agent/index.html';
+    let captchaToken = null;
+    
+    // 使用 URL Manager 處理跳轉
+    const urlManager = window.URLManager;
+    
+    // 讀取跳轉參數，預設為櫃員頁面
+    const params = new URLSearchParams(location.search);
+    const redirectTo = params.get('redirect') || '/agent/index.html';
 
     async function loadCaptcha(){
       try{
@@ -80,68 +85,16 @@
             if(acct) sessionStorage.setItem('agent_name', acct);
           }
         }catch(e){ console.warn('storage error', e); }
-        // avoid open redirect by allowing only same-origin absolute paths
-        try{
-          console.log('Original redirectTo:', redirectTo);
-          
-          // Simple and robust path-based redirect
-          if (redirectTo.startsWith('/')) {
-            // Absolute path - construct full URL properly
-            const baseUrl = location.origin;
-            const fullUrl = baseUrl + redirectTo;
-            console.log('Constructing URL from path:', redirectTo);
-            console.log('Base URL:', baseUrl);
-            console.log('Final URL:', fullUrl);
-            location.href = fullUrl;
-            return;
-          }
-          
-          // Handle full URLs - be more permissive for DevTunnel environments
-          if(redirectTo.startsWith('http://') || redirectTo.startsWith('https://')){
-            try {
-              const targetUrl = new URL(redirectTo);
-              console.log('Full URL detected:', targetUrl.href);
-              console.log('Current origin:', location.origin);
-              console.log('Target origin:', targetUrl.origin);
-              
-              // Allow same origin or DevTunnel/localhost domains
-              const currentHost = location.hostname;
-              const targetHost = targetUrl.hostname;
-              
-              const isAllowed = (
-                targetUrl.origin === location.origin ||
-                (targetHost.includes('devtunnels.ms') && currentHost.includes('devtunnels.ms')) ||
-                (targetHost === 'localhost' && currentHost === 'localhost') ||
-                (targetHost === '127.0.0.1' && currentHost === '127.0.0.1')
-              );
-              
-              if (isAllowed) {
-                console.log('Origin validation passed, redirecting to:', targetUrl.href);
-                location.href = targetUrl.href;
-                return;
-              } else {
-                console.warn('Cross-origin redirect blocked:', redirectTo);
-                console.warn('Current host:', currentHost, 'Target host:', targetHost);
-                location.href = '/agent/index.html';
-                return;
-              }
-            } catch (urlError) {
-              console.error('URL parsing error:', urlError);
-              location.href = '/agent/index.html';
-              return;
-            }
-          }
-          
-          // Fallback: treat as relative path
-          console.log('Treating as relative path:', redirectTo);
-          location.href = redirectTo;
-          
-        }catch(e){ 
-          console.error('Redirect error:', e);
-          console.log('Fallback to agent page');
-          location.href = '/agent/index.html'; 
-        }
-      }catch(err){ console.error(err); alert('登入錯誤'); }
+        
+        // 使用 URL Manager 處理安全跳轉
+        console.log('登入成功，準備跳轉到:', redirectTo);
+        await urlManager.handleLoginRedirect(redirectTo);
+        
+      }catch(err){ 
+        console.error('登入錯誤:', err); 
+        alert('登入錯誤'); 
+        await loadCaptcha();
+      }
     });
 
     loadCaptcha();
