@@ -92,9 +92,8 @@
     // 使用 URL Manager
     const urlManager = window.URLManager;
     
-    // Use the PIN from environment variable (same as櫃員端)
-    const ADMIN_PIN = '0000'; // This should match your .env AGENT_PIN
-
+    // 移除 PIN 認證，改為依賴登入狀態
+    
     function showMsg(text, err) {
       const el = document.getElementById('msg');
       el.textContent = text;
@@ -132,11 +131,6 @@
     async function apiFetch(url, opts = {}) {
       opts = Object.assign({ headers: {} }, opts);
       
-      // For admin operations, use ADMIN_PIN
-      if (sessionStorage.getItem('agent_role') === 'admin') {
-        opts.headers['x-agent-pin'] = ADMIN_PIN;
-      }
-      
       if (!opts.headers['Content-Type']) opts.headers['Content-Type'] = 'application/json';
       
       // Add agent authentication for agent profile API
@@ -153,8 +147,7 @@
     async function getCsrfToken() {
       try {
         const res = await fetch('/api/admin/csrf', { 
-          method: 'POST', 
-          headers: { 'x-agent-pin': ADMIN_PIN } 
+          method: 'POST'
         });
         const data = await res.json();
         return data.csrfToken;
@@ -233,7 +226,6 @@
           method: 'PUT', 
           headers: {
             'Content-Type': 'application/json',
-            'x-agent-pin': ADMIN_PIN,
             'x-csrf-token': csrfToken
           },
           body: JSON.stringify(body) 
@@ -256,7 +248,6 @@
         const res = await fetch(`/api/agents/${id}`, { 
           method: 'DELETE',
           headers: {
-            'x-agent-pin': ADMIN_PIN,
             'x-csrf-token': csrfToken
           }
         });
@@ -319,7 +310,6 @@
           method: 'POST', 
           headers: {
             'Content-Type': 'application/json',
-            'x-agent-pin': ADMIN_PIN,
             'x-csrf-token': csrfToken
           },
           body: JSON.stringify({ account, name, password, counter, role }) 

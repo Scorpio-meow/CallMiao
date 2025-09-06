@@ -116,7 +116,6 @@
                             <tr>
                                 <th>號碼</th>
                                 <th>時間</th>
-                                <th>電話</th>
                             </tr>
                         </thead>
                         <tbody id="waiting"></tbody>
@@ -168,19 +167,6 @@
             <input id="loginCounter" placeholder="櫃台編號" />
             <div class="actions mt-12 flex-end gap-8">
                 <button id="loginBtn" class="btn btn-primary">登入</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Phone input modal for create/pickup -->
-    <div id="phoneInputModal" class="auth-overlay hidden">
-        <div class="auth-card">
-            <h2>輸入電話（必填）</h2>
-            <label>電話</label>
-            <input id="modalPhone" placeholder="0912345678" required />
-            <div class="actions mt-12 flex-end gap-8">
-                <button id="modalCancel" class="btn btn-light">取消</button>
-                <button id="modalOk" class="btn btn-primary">確定</button>
             </div>
         </div>
     </div>
@@ -257,8 +243,6 @@
             window.location.href = '/login/index.html';
         };
 
-        function maskPhone(p) { if (!p) return ''; return String(p).replace(/(\d{3})\d{4}(\d{3,4})/, '$1****$2'); }
-
         function toast(msg, type = 'info') {
             const el = document.createElement('div');
             el.className = `toast ${type}`;
@@ -268,23 +252,22 @@
             setTimeout(() => { el.classList.remove('show'); el.remove(); }, 3000);
         }
 
-        // apiFetch wrapper: attach x-agent-pin for protected endpoints and x-agent-name for display only
-        // memory-only PIN for this tab; cleared on refresh/close
-        let ADMIN_PIN_MEM = null;
-        window.addEventListener('beforeunload', () => { ADMIN_PIN_MEM = null; });
+        // apiFetch wrapper: attach agent authentication headers
         async function apiFetch(url, opts = {}) {
             opts = Object.assign({ headers: {} }, opts);
+            const account = sessionStorage.getItem('agent_account');
             const name = sessionStorage.getItem('agent_name');
-            if (ADMIN_PIN_MEM) { opts.headers['x-agent-pin'] = ADMIN_PIN_MEM; }
-            // retain name header only for server-side logging (not for auth)
-            if (name) { try { opts.headers['x-agent-name'] = encodeURIComponent(name); } catch (e) { opts.headers['x-agent-name'] = name; } }
+            
+            if (account && name) {
+                opts.headers['x-agent-account'] = account;
+                opts.headers['x-agent-name'] = encodeURIComponent(name);
+            }
+            
             let res = await fetch(url, opts);
             if (res.status === 401) {
-                // prompt once per action; do not persist
-                const newPin = prompt('請輸入管理 PIN 以使用櫃員功能');
-                ADMIN_PIN_MEM = newPin || null;
-                opts.headers['x-agent-pin'] = ADMIN_PIN_MEM || '';
-                res = await fetch(url, opts);
+                toast('認證失敗，請重新登入', 'error');
+                window.location.href = '/login/index.html';
+                return res;
             }
             return res;
         }
@@ -293,8 +276,7 @@
             const el = document.querySelector('#selectedInfo');
             if (!el) return;
             if (!ticket) { el.textContent = ''; return; }
-            const phoneMasked = maskPhone(ticket.phone);
-            el.innerHTML = `選取：<strong>${ticket.number}</strong>，櫃台 ${ticket.counter || '-'}，電話 ${phoneMasked || '-'}`;
+            el.innerHTML = `選取：<strong>${ticket.number}</strong>，櫃台 ${ticket.counter || '-'}`;
         }
 
         function updateClock() {
@@ -371,7 +353,7 @@
                     if (vis) vis.value = num;
                     // construct selected info from currentCalls if present
                     const svc = rowByNumber.querySelector('.badge') ? rowByNumber.querySelector('.badge').textContent : '';
-                    setSelectedInfo({ number: num, counter: rowByNumber.querySelector('td:nth-child(2)') ? rowByNumber.querySelector('td:nth-child(2)').textContent.trim() : '-', phone: '' , serviceType: svc, id: id });
+                    setSelectedInfo({ number: num, counter: rowByNumber.querySelector('td:nth-child(2)') ? rowByNumber.querySelector('td:nth-child(2)').textContent.trim() : '-', serviceType: svc, id: id });
                     return;
                 }
                 // fallback: if num looks numeric, try match by internal id
@@ -380,7 +362,7 @@
                     const number = possibleRowById.getAttribute('data-number') || '';
                     if (hid) hid.value = possibleRowById.getAttribute('data-id') || '';
                     if (vis) vis.value = number;
-                    setSelectedInfo({ number: number, counter: possibleRowById.querySelector('td:nth-child(2)') ? possibleRowById.querySelector('td:nth-child(2)').textContent.trim() : '-', phone: '', id: possibleRowById.getAttribute('data-id') });
+                    setSelectedInfo({ number: number, counter: possibleRowById.querySelector('td:nth-child(2)') ? possibleRowById.querySelector('td:nth-child(2)').textContent.trim() : '-', id: possibleRowById.getAttribute('data-id') });
                     return;
                 }
                 alert('找不到對應的叫號');
@@ -398,13 +380,11 @@
             const waitingTbody = document.querySelector('#waiting');
             if (waitingTbody) {
                 waitingTbody.innerHTML = waitingData.tickets.map(t =>
-                    // 補上 data-id 以沿用既有的 [data-id] 點擊事件處理
                     `<tr class="clickable" data-waiting-id="${t.id}" data-id="${t.id}" data-number="${t.number}">
                         <td>${t.number}</td>
                         <td>${new Date(t.createdAt).toLocaleTimeString()}</td>
-                        <td>${maskPhone(t.phone)}</td>
                     </tr>`
-                ).join('') || '<tr><td colspan="3">無</td></tr>';
+                ).join('') || '<tr><td colspan="2">無</td></tr>';
             }
 
             const currentTbody = document.querySelector('#current');
@@ -429,22 +409,17 @@
                     // Immediately update selected info with available data
                     let ticketInfo = { number: num, id: id };
                     
-                    // Try to get phone from waiting table if this is a waiting ticket
+                    // waiting ticket
                     if (tr.hasAttribute('data-waiting-id')) {
                         const waitingTicket = waitingData.tickets?.find(t => t.id === Number(id));
                         if (waitingTicket) {
-                            ticketInfo = { ...ticketInfo, phone: waitingTicket.phone, counter: waitingTicket.counter };
+                            ticketInfo = { ...ticketInfo, counter: waitingTicket.counter };
                         }
                     } else {
-                        // This is a current call, try to get info from currentCalls
+                        // current call info
                         const currentCall = (data.currentCalls || []).find(c => c.id === Number(id));
                         if (currentCall) {
                             ticketInfo = { ...ticketInfo, counter: currentCall.counter, serviceType: currentCall.serviceType };
-                            // Try to get phone from waiting data as backup
-                            const waitingTicket = waitingData.tickets?.find(t => t.id === Number(id));
-                            if (waitingTicket && waitingTicket.phone) {
-                                ticketInfo.phone = waitingTicket.phone;
-                            }
                         }
                     }
                     
@@ -465,11 +440,6 @@
                     const currentCall = (data.currentCalls || []).find(c => c.id === Number(id));
                     if (currentCall) {
                         ticketInfo = { ...ticketInfo, counter: currentCall.counter, serviceType: currentCall.serviceType };
-                        // Try to get phone from waiting data
-                        const waitingTicket = waitingData.tickets?.find(t => t.id === Number(id));
-                        if (waitingTicket && waitingTicket.phone) {
-                            ticketInfo.phone = waitingTicket.phone;
-                        }
                     }
                     
                     setSelectedInfo(ticketInfo);
@@ -481,26 +451,17 @@
             const selId = hidVal ? Number(hidVal) : null;
             const visNum = document.querySelector('#ticketId')?.value;
             let cur = null;
-            if (selId) {
-                cur = (data.currentCalls || []).find(x => x.id === selId);
-                // If currentCalls doesn't have phone info, try to get it from waitingData
-                if (cur && !cur.phone) {
-                    const waitingTicket = waitingData.tickets?.find(t => t.id === selId);
-                    if (waitingTicket && waitingTicket.phone) {
-                        cur = { ...cur, phone: waitingTicket.phone };
-                    }
+            if (selId) { cur = (data.currentCalls || []).find(x => x.id === selId); }
+            if (!cur && visNum) { cur = (data.currentCalls || []).find(x => String(x.number) === String(visNum)); }
+
+            // If still no selection, auto-select current call for this counter (if any).
+            if (!cur) {
+                const myCounter = sessionStorage.getItem('agent_counter') || document.querySelector('#counter')?.value || '';
+                if (myCounter) {
+                    cur = (data.currentCalls || []).find(c => String(c.counter) === String(myCounter));
                 }
             }
-            if (!cur && visNum) {
-                cur = (data.currentCalls || []).find(x => String(x.number) === String(visNum));
-                // If currentCalls doesn't have phone info, try to get it from waitingData
-                if (cur && !cur.phone) {
-                    const waitingTicket = waitingData.tickets?.find(t => t.id === cur.id);
-                    if (waitingTicket && waitingTicket.phone) {
-                        cur = { ...cur, phone: waitingTicket.phone };
-                    }
-                }
-            }
+
             setSelectedInfo(cur || null);
 
             // Stats: local (selected service waiting), total (sum waiting)
@@ -562,7 +523,7 @@
                 const hid = document.querySelector('#ticketInternalId');
                 if (vis) vis.value = data.ticket.number || '';
                 if (hid) hid.value = data.ticket.id || '';
-                try { setSelectedInfo({ number: data.ticket.number, counter: data.ticket.counter, phone: data.ticket.phone, id: data.ticket.id, serviceType: data.ticket.serviceType }); } catch (e) { /* noop */ }
+                try { setSelectedInfo({ number: data.ticket.number, counter: data.ticket.counter, id: data.ticket.id, serviceType: data.ticket.serviceType }); } catch (e) { /* noop */ }
             }
             await refresh();
         };
@@ -598,29 +559,8 @@
         $('#markServing').onclick = async () => {
             const id = $('#ticketInternalId').value;
             if (!id) { alert('請選取一筆叫號'); return; }
-            // fetch ticket to get full phone (not masked)
-            // use protected endpoint to retrieve phone for verification
-            const ticketRes = await apiFetch(`/api/agent/ticket/${Number(id)}`);
-            if (!ticketRes.ok) {
-                const j = await ticketRes.json().catch(() => ({ error: '查詢失敗' }));
-                alert(j && j.error ? j.error : '取得票券失敗');
-                return;
-            }
-            const ticketJson = await ticketRes.json();
-            const ticket = ticketJson.ticket;
-            const phoneDigits = ticket && ticket.phone ? String(ticket.phone).replace(/\D/g, '') : '';
-            if (!phoneDigits) {
-                alert('此票券未紀錄電話，無法透過電話後四碼驗證開始服務');
-                return;
-            }
-            const last4 = phoneDigits.slice(-4);
-            const v = prompt('請輸入客戶電話後四碼以開始服務');
-            if (v === null) return; // user cancelled
-            if (String(v).trim() !== String(last4)) { alert('電話後四碼驗證失敗'); return; }
-            // verified, proceed to mark serving
             const res = await apiFetch('/api/agent/markServing', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ticketId: Number(id) })
             });
             const data = await res.json();
@@ -679,7 +619,7 @@
                 const hid = document.querySelector('#ticketInternalId');
                 if (vis) vis.value = data.ticket.number || '';
                 if (hid) hid.value = data.ticket.id || '';
-                try { setSelectedInfo({ number: data.ticket.number, counter: data.ticket.counter, phone: data.ticket.phone, id: data.ticket.id, serviceType: data.ticket.serviceType }); } catch (e) { /* noop */ }
+                try { setSelectedInfo({ number: data.ticket.number, counter: data.ticket.counter, id: data.ticket.id, serviceType: data.ticket.serviceType }); } catch (e) { /* noop */ }
             }
             await refresh();
         };
@@ -715,37 +655,32 @@
                 const hid = document.querySelector('#ticketInternalId');
                 if (vis) vis.value = data.ticket.number || '';
                 if (hid) hid.value = data.ticket.id || '';
-                try { setSelectedInfo({ number: data.ticket.number, counter: data.ticket.counter, phone: data.ticket.phone, id: data.ticket.id, serviceType: data.ticket.serviceType }); } catch (e) { /* noop */ }
+                try { setSelectedInfo({ number: data.ticket.number, counter: data.ticket.counter, id: data.ticket.id, serviceType: data.ticket.serviceType }); } catch (e) { /* noop */ }
             }
             await refresh();
         };
 
         $('#createTicket').onclick = async () => {
-
-            showPhoneModal(async (phone) => {
-                const serviceType = document.querySelector('#serviceType').value;
-                const res = await apiFetch('/api/agent/createTicket', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ serviceType, phone })
-                });
-                const data = await res.json();
-                if (data.error) { toast(data.error, 'error'); } else { toast(`\u5df2\u5efa\u7acb ${data.ticket.number}`, 'success'); }
-                await refresh();
+            const serviceType = document.querySelector('#serviceType').value;
+            const res = await apiFetch('/api/agent/createTicket', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ serviceType })
             });
+            const data = await res.json();
+            if (data.error) { toast(data.error, 'error'); } else { toast(`已建立 ${data.ticket.number}`, 'success'); }
+            await refresh();
         };
 
         // 未取號補取（與 櫃台取號 相同 API，但顯示不同文案）
         $('#pickup').onclick = async () => {
-            showPhoneModal(async (phone) => {
-                const serviceType = document.querySelector('#serviceType').value;
-                const res = await apiFetch('/api/agent/createTicket', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ serviceType, phone })
-                });
-                const data = await res.json();
-                if (data.error) { toast(data.error, 'error'); } else { toast(`\u5df2\u88dc\u53d6 ${data.ticket.number}`, 'success'); }
-                await refresh();
+            const serviceType = document.querySelector('#serviceType').value;
+            const res = await apiFetch('/api/agent/createTicket', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ serviceType })
             });
+            const data = await res.json();
+            if (data.error) { toast(data.error, 'error'); } else { toast(`已補取 ${data.ticket.number}`, 'success'); }
+            await refresh();
         };
 
         // 暫停服務：將目前選擇的 ticket 狀態轉為 waiting（相當於 transfer keepStatus=false 保持原服務別與櫃台清空）
@@ -778,7 +713,7 @@
                 const hid = document.querySelector('#ticketInternalId');
                 if (vis) vis.value = data.ticket.number || '';
                 if (hid) hid.value = data.ticket.id || '';
-                try { setSelectedInfo({ number: data.ticket.number, counter: data.ticket.counter, phone: data.ticket.phone, id: data.ticket.id, serviceType: data.ticket.serviceType }); } catch (e) { /* noop */ }
+                try { setSelectedInfo({ number: data.ticket.number, counter: data.ticket.counter, id: data.ticket.id, serviceType: data.ticket.serviceType }); } catch (e) { /* noop */ }
             }
             await refresh();
         };
@@ -826,26 +761,6 @@
                 toast('已送出訊息', 'success');
         };
 
-        // phone modal helpers
-        function showPhoneModal(cb) {
-            const modal = document.getElementById('phoneInputModal');
-            const input = document.getElementById('modalPhone');
-            modal.classList.remove('hidden');
-            input.value = '';
-            input.focus();
-            const onlyDigits = (s) => (s || '').replace(/\D/g, '');
-            const onCancel = () => { modal.classList.add('hidden'); cleanup(); };
-            const onOk = () => {
-                const val = input.value.trim();
-                const digits = onlyDigits(val);
-                if (!digits || digits.length < 6) { alert('請輸入有效的電話號碼（至少 6 位數）'); input.focus(); return; }
-                modal.classList.add('hidden'); cleanup(); cb(digits);
-            };
-            const cleanup = () => { document.getElementById('modalCancel').removeEventListener('click', onCancel); document.getElementById('modalOk').removeEventListener('click', onOk); };
-            document.getElementById('modalCancel').addEventListener('click', onCancel);
-            document.getElementById('modalOk').addEventListener('click', onOk);
-        }
-
         // service buttons and quick counters are rendered and bound inside renderCategoryList
 
         // keyboard shortcuts
@@ -857,8 +772,9 @@
             if (e.key === 'x' || e.key === 'X') { e.preventDefault(); document.querySelector('#cancel').click(); }
         });
 
-        // open second screen
-        document.querySelector('#openSecondScreen').onclick = () => { window.open('/lobby/index.html', '_blank'); };
+    // open second screen (element may be omitted in some builds)
+    const openSecondEl = document.querySelector('#openSecondScreen');
+    if (openSecondEl) openSecondEl.onclick = () => { window.open('/lobby/index.html', '_blank'); };
 
         // Counter is now read-only and set by admin via login system
         // Socket room management is handled during login/logout

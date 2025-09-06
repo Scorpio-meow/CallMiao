@@ -12,12 +12,6 @@ const bcrypt = require('bcryptjs');
 require('dotenv').config();
 
 const PORT = process.env.PORT || 3000;
-// AGENT_PIN must be provided via environment variable for security
-const AGENT_PIN = process.env.AGENT_PIN;
-if (!AGENT_PIN) {
-  console.error('嚴重錯誤：需要 AGENT_PIN 環境變數。');
-  process.exit(1);
-}
 
 // ALLOWED_ORIGINS: comma-separated list of allowed origins for CORS (defaults to localhost)
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS && process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()).filter(Boolean)) || ['http://localhost:3000'];
@@ -53,7 +47,6 @@ CREATE TABLE IF NOT EXISTS tickets (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   serviceType TEXT NOT NULL,
   number TEXT NOT NULL,
-  phone TEXT,
   status TEXT NOT NULL DEFAULT 'waiting',
   counter TEXT,
   result TEXT,
@@ -253,8 +246,8 @@ app.post('/api/login', loginLimiter, (req, res) => {
   return res.json({ ok: true, agent: { id: user.id, account: user.account, name: user.name, counter: user.counter, role: user.role } });
 });
 
-// Issue a CSRF token for admin UI; requires valid x-agent-pin header (requirePin middleware)
-app.post('/api/admin/csrf', adminAgentLimiter, requirePin, (req, res) => {
+// Issue a CSRF token for admin UI
+app.post('/api/admin/csrf', adminAgentLimiter, (req, res) => {
   try {
     const token = genCsrf();
     csrfStore[token] = { createdAt: Date.now() };
@@ -263,12 +256,12 @@ app.post('/api/admin/csrf', adminAgentLimiter, requirePin, (req, res) => {
 });
 
 // --- agents management API (simple CRUD) ---
-app.get('/api/agents', requirePin, (req, res) => {
+app.get('/api/agents', (req, res) => {
   const rows = db.prepare('SELECT id, account, name, counter, role, active, createdAt, updatedAt FROM agents ORDER BY id DESC').all();
   res.json({ agents: rows });
 });
 
-app.post('/api/agents', requirePin, requireCsrf, (req, res) => {
+app.post('/api/agents', requireCsrf, (req, res) => {
   const { account, name, password, counter, role } = req.body || {};
   if (!account || !password) return res.status(400).json({ error: 'account and password required' });
   const now = dayjs().toISOString();
@@ -284,13 +277,13 @@ app.post('/api/agents', requirePin, requireCsrf, (req, res) => {
   }
 });
 
-app.get('/api/agents/:id', requirePin, (req, res) => {
+app.get('/api/agents/:id', (req, res) => {
   const row = db.prepare('SELECT id, account, name, counter, role, active, createdAt, updatedAt FROM agents WHERE id=?').get(req.params.id);
   if (!row) return res.status(404).json({ error: 'not found' });
   res.json({ agent: row });
 });
 
-app.put('/api/agents/:id', requirePin, requireCsrf, (req, res) => {
+app.put('/api/agents/:id', requireCsrf, (req, res) => {
   const id = req.params.id;
   const { name, password, counter, role, active } = req.body || {};
   const now = dayjs().toISOString();
@@ -303,7 +296,7 @@ app.put('/api/agents/:id', requirePin, requireCsrf, (req, res) => {
   res.json({ agent: row });
 });
 
-app.delete('/api/agents/:id', requirePin, requireCsrf, (req, res) => {
+app.delete('/api/agents/:id', requireCsrf, (req, res) => {
   const id = req.params.id;
   db.prepare('DELETE FROM agents WHERE id=?').run(id);
   res.json({ ok: true });
@@ -409,19 +402,14 @@ app.get('/api/config', (req, res) => {
 app.post('/api/tickets', (req, res) => {
   try {
     const { serviceType } = req.body || {};
-    let { phone } = req.body || {};
     if (!serviceType) return res.status(400).json({ error: 'serviceType is required' });
-    // normalize phone: keep digits only, treat empty as null
-    phone = phone ? String(phone).replace(/\D/g, '') : null;
-    if (phone === '') phone = null;
-    // phone is required
-    if (!phone) return res.status(400).json({ error: 'phone is required' });
+    
     const createdAt = dayjs().toISOString();
     const number = getNextNumber(serviceType.toUpperCase());
     const info = db.prepare(`
-      INSERT INTO tickets(serviceType, number, phone, status, createdAt)
-      VALUES (?, ?, ?, 'waiting', ?)
-    `).run(serviceType.toUpperCase(), number, phone || null, createdAt);
+      INSERT INTO tickets(serviceType, number, status, createdAt)
+      VALUES (?, ?, 'waiting', ?)
+    `).run(serviceType.toUpperCase(), number, createdAt);
     const ticket = db.prepare('SELECT * FROM tickets WHERE id=?').get(info.lastInsertRowid);
     emitQueueUpdate(serviceType.toUpperCase());
     res.json({ ticket });
@@ -443,17 +431,16 @@ app.get('/api/tickets/waiting', (req, res) => {
   res.json({ tickets: rows });
 });
 
-// Public ticket detail (sanitized)
+// Public ticket detail
 app.get('/api/ticket/:id', (req, res) => {
   const { id } = req.params;
   const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(id);
   if (!row) return res.status(404).json({ error: 'not found' });
-  const { phone, ...rest } = row;
-  res.json({ ticket: rest });
+  res.json({ ticket: row });
 });
 
-// Protected ticket detail for agents (includes phone)
-app.get('/api/agent/ticket/:id', requirePin, (req, res) => {
+// Protected ticket detail for agents
+app.get('/api/agent/ticket/:id', (req, res) => {
   const { id } = req.params;
   const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(id);
   if (!row) return res.status(404).json({ error: 'not found' });
@@ -464,25 +451,12 @@ app.get('/api/overview', (req, res) => {
   res.json(getOverview());
 });
 
-function requirePin(req, res, next) {
-  // Enforce header PIN only; remove name-based bypass
-  const pin = req.get('x-agent-pin');
-  if (!AGENT_PIN || pin !== AGENT_PIN) return res.status(401).json({ error: 'unauthorized' });
-  next();
-}
-
 function requireAgentAuth(req, res, next) {
-  // Check for either admin PIN or valid agent authentication
-  const pin = req.get('x-agent-pin');
+  // Simple agent authentication without PIN
   const agentAccount = req.get('x-agent-account');
   const agentName = req.get('x-agent-name');
   
-  // If admin PIN is provided, allow access
-  if (AGENT_PIN && pin === AGENT_PIN) {
-    return next();
-  }
-  
-  // Otherwise, require agent authentication
+  // Require agent authentication
   if (!agentAccount || !agentName) {
     return res.status(401).json({ error: 'unauthorized - missing agent credentials' });
   }
@@ -515,7 +489,7 @@ function requireCsrf(req, res, next) {
 // Apply rate limiter to all /api/agent/* endpoints
 app.use('/api/agent', adminAgentLimiter);
 
-app.post('/api/agent/callNext', requirePin, (req, res) => {
+app.post('/api/agent/callNext', requireAgentAuth, (req, res) => {
   const { serviceType, counter } = req.body || {};
   if (!serviceType) return res.status(400).json({ error: 'serviceType is required' });
   const ctr = (counter === undefined || counter === null) ? '' : String(counter).trim();
@@ -539,18 +513,13 @@ app.post('/api/agent/callNext', requirePin, (req, res) => {
   res.json({ ticket: updated });
 });
 
-app.post('/api/agent/finish', requirePin, (req, res) => {
-  const { ticketId, result, verify4 } = req.body || {};
+app.post('/api/agent/finish', requireAgentAuth, (req, res) => {
+  const { ticketId, result } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: 'ticketId is required' });
   const finishedAt = dayjs().toISOString();
   const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
   if (!row) return res.status(404).json({ error: 'not found' });
-  if (verify4 && row.phone) {
-    const last4 = String(row.phone).replace(/\D/g, '').slice(-4);
-    if (last4 && last4 !== String(verify4)) {
-      return res.status(400).json({ error: 'phone verification failed' });
-    }
-  }
+  
   db.prepare('UPDATE tickets SET status=?, finishedAt=?, result=? WHERE id=?')
     .run('finished', finishedAt, result || null, ticketId);
   const updated = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
@@ -558,7 +527,7 @@ app.post('/api/agent/finish', requirePin, (req, res) => {
   res.json({ ticket: updated });
 });
 
-app.post('/api/agent/markServing', requirePin, (req, res) => {
+app.post('/api/agent/markServing', requireAgentAuth, (req, res) => {
   const { ticketId } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: 'ticketId is required' });
   const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
@@ -570,7 +539,7 @@ app.post('/api/agent/markServing', requirePin, (req, res) => {
 });
 
 // Recall: re-trigger call for an already called ticket (keep status 'called', update calledAt)
-app.post('/api/agent/recall', requirePin, (req, res) => {
+app.post('/api/agent/recall', requireAgentAuth, (req, res) => {
   const { ticketId } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: 'ticketId is required' });
   const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
@@ -585,7 +554,7 @@ app.post('/api/agent/recall', requirePin, (req, res) => {
 });
 
 // Cancel: mark a ticket as canceled
-app.post('/api/agent/cancel', requirePin, (req, res) => {
+app.post('/api/agent/cancel', requireAgentAuth, (req, res) => {
   const { ticketId, reason } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: 'ticketId is required' });
   const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
@@ -599,7 +568,7 @@ app.post('/api/agent/cancel', requirePin, (req, res) => {
 });
 
 // Transfer: change serviceType and/or counter; reset to waiting by default
-app.post('/api/agent/transfer', requirePin, (req, res) => {
+app.post('/api/agent/transfer', requireAgentAuth, (req, res) => {
   const { ticketId, toServiceType, toCounter, keepStatus } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: 'ticketId is required' });
   const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
@@ -622,21 +591,17 @@ app.post('/api/agent/transfer', requirePin, (req, res) => {
 });
 
 // Agent creates a new ticket (counter-created)
-app.post('/api/agent/createTicket', requirePin, (req, res) => {
+app.post('/api/agent/createTicket', requireAgentAuth, (req, res) => {
   try {
     const { serviceType } = req.body || {};
-    let { phone } = req.body || {};
     if (!serviceType) return res.status(400).json({ error: 'serviceType is required' });
-    phone = phone ? String(phone).replace(/\D/g, '') : null;
-    if (phone === '') phone = null;
-    // force phone required for counter-created tickets
-    if (!phone) return res.status(400).json({ error: 'phone is required' });
+    
     const createdAt = dayjs().toISOString();
     const number = getNextNumber(serviceType.toUpperCase());
     const info = db.prepare(`
-      INSERT INTO tickets(serviceType, number, phone, status, createdAt)
-      VALUES (?, ?, ?, 'waiting', ?)
-    `).run(serviceType.toUpperCase(), number, phone || null, createdAt);
+      INSERT INTO tickets(serviceType, number, status, createdAt)
+      VALUES (?, ?, 'waiting', ?)
+    `).run(serviceType.toUpperCase(), number, createdAt);
     const ticket = db.prepare('SELECT * FROM tickets WHERE id=?').get(info.lastInsertRowid);
     emitQueueUpdate(serviceType.toUpperCase());
     res.json({ ticket });
@@ -647,7 +612,7 @@ app.post('/api/agent/createTicket', requirePin, (req, res) => {
 });
 
 // Call a specific ticket by id
-app.post('/api/agent/callSpecific', requirePin, (req, res) => {
+app.post('/api/agent/callSpecific', requireAgentAuth, (req, res) => {
   const { ticketId, counter, internal } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: 'ticketId is required' });
   const ctr = (counter === undefined || counter === null) ? '' : String(counter).trim();
@@ -667,7 +632,7 @@ app.post('/api/agent/callSpecific', requirePin, (req, res) => {
 });
 
 // History of served/canceled tickets
-app.get('/api/agent/history', requirePin, (req, res) => {
+app.get('/api/agent/history', requireAgentAuth, (req, res) => {
   const limit = Math.min(parseInt(req.query.limit || '100', 10), 500);
   const serviceType = req.query.serviceType ? String(req.query.serviceType).toUpperCase() : null;
   const rows = db.prepare(`
@@ -681,7 +646,7 @@ app.get('/api/agent/history', requirePin, (req, res) => {
 });
 
 // Agent messaging (broadcast to agents)
-app.post('/api/agent/message', requirePin, (req, res) => {
+app.post('/api/agent/message', requireAgentAuth, (req, res) => {
   const { text, from, toCounter, toAgent } = req.body || {};
   if (!text) return res.status(400).json({ error: 'text is required' });
   const payload = { text, from: from || 'agent', toCounter: toCounter || null, toAgent: toAgent || null, time: new Date().toISOString() };

@@ -24,7 +24,6 @@ npm install
 
 ```
 PORT=3000
-AGENT_PIN=0000
 ALLOWED_ORIGINS=http://localhost:3000
 NODE_ENV=development
 ```
@@ -42,9 +41,6 @@ npm run dev
 - Lobby：http://localhost:3000/lobby/index.html
 - 管理頁：http://localhost:3000/admin/agents.html
 
-提示：若你看到「嚴重錯誤：需要 AGENT_PIN 環境變數。」請在 `.env` 設定後重啟。
-
-
 ## 需求與相容性
 
 - Node.js 16 以上（建議 18+）
@@ -54,19 +50,13 @@ npm run dev
 
 ## 設定（.env／環境變數）
 
-- AGENT_PIN（必填）：後台/管理 API 所需的 PIN；伺服器啟動時會強制檢查
 - PORT（選填，預設 3000）：HTTP 服務埠
 - ALLOWED_ORIGINS（選填）：允許的前端網域清單，逗號分隔，例如：
   - `http://localhost:3000,http://127.0.0.1:3000`
 - PUBLIC_ORIGIN（選填）：對外公開的網址（用於 QR 與公開連結）
 - NODE_ENV（選填）：`production` 時請搭配更嚴格的 CORS/CSP 設定
 
-你也可以不使用 `.env`，直接在 Windows 設定環境變數：
-
-```powershell
-setx AGENT_PIN "0000"
-# 關閉並重開 PowerShell 視窗後生效
-```
+（舊版以 AGENT_PIN 控制管理端已廢除，改採登入與角色權限。）
 
 
 ## 專案結構
@@ -83,11 +73,10 @@ setx AGENT_PIN "0000"
 
 ## 管理與帳號（CSRF 流程）
 
-管理 UI（`/admin/agents.html`）與管理 API 需要：
+管理 UI（`/admin/agents.html`）與管理 API 需要管理員權限，系統會檢查登入狀態和角色：
 
-1) 於 Header 帶入 `x-agent-pin: <AGENT_PIN>`
-2) 先呼叫 POST `/api/admin/csrf` 取得 `{ csrfToken }`
-3) 後續在瀏覽器來源（Origin 在 ALLOWED_ORIGINS 內）呼叫 `/api/agents` 的 POST/PUT/DELETE 時，加上 Header `x-csrf-token: <csrfToken>`
+1) 先呼叫 POST `/api/admin/csrf` 取得 `{ csrfToken }`
+2) 後續在瀏覽器來源（Origin 在 ALLOWED_ORIGINS 內）呼叫 `/api/agents` 的 POST/PUT/DELETE 時，加上 Header `x-csrf-token: <csrfToken>`
 
 ### 櫃台號管理重要說明
 
@@ -98,15 +87,7 @@ setx AGENT_PIN "0000"
 - 櫃員端的櫃台號欄位為唯讀，不可手動更改
 - 如需變更櫃台號，須聯絡管理員透過管理介面修改
 
-PowerShell 範例（建立帳號）：
-
-```powershell
-$csrf = Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/admin/csrf -Headers @{ 'x-agent-pin' = '0000' }
-$body = @{ account='alice'; name='Alice'; password='pass123'; counter='1' } | ConvertTo-Json
-Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/agents -ContentType 'application/json' -Body $body -Headers @{ 'x-agent-pin' = '0000'; 'x-csrf-token' = $csrf.csrfToken }
-```
-
-備註：CSRF 僅對帶有瀏覽器 `Origin` 且落在 ALLOWED_ORIGINS 的請求強制檢查；CLI（如 curl/Invoke-RestMethod）預設無 Origin，CSRF 不會被觸發。
+備註：CSRF 僅對帶有瀏覽器 `Origin` 且落在 ALLOWED_ORIGINS 的請求強制檢查；CLI（如 curl/PowerShell）預設無 Origin，CSRF 不會被觸發。
 
 
 ## API 摘要
@@ -114,9 +95,9 @@ Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/agents -ContentTyp
 公共 API：
 
 - GET `/api/health`：健康檢查
-- POST `/api/tickets`：建立號碼（Body：`{ serviceType:'A', phone:'09...' }`，phone 必填）
+- POST `/api/tickets`：建立號碼（Body：`{ serviceType:'A' }`）
 - GET `/api/tickets/waiting?serviceType=A`：取得等待清單
-- GET `/api/ticket/:id`：查詢單筆票券（隱去 phone）
+- GET `/api/ticket/:id`：查詢單筆票券
 - GET `/api/overview`：回傳 summary + currentCalls
 - GET `/api/qrcode?text=...`：回傳 PNG QR 圖檔
 
@@ -126,20 +107,20 @@ Captcha / Login：
 - GET `/api/captcha/image/:token`：回傳對應 token 的驗證碼圖片（預設 PNG；若 `sharp` 不可用則回傳 SVG）
 - POST `/api/login`：驗證 Captcha 與帳密（與 `agents` 表連動；回傳 `{ ok:true, agent }`）
 
-Agent / 管理 API（Header 需帶 `x-agent-pin`）：
+Agent API（需要有效的櫃員登入認證）：
 
 - POST `/api/agent/callNext`：叫下一位（Body：`{ serviceType, counter }`）
 - POST `/api/agent/callSpecific`：指定叫號（Body：`{ ticketId, counter, internal? }`）
 - POST `/api/agent/markServing`：標記開始服務（Body：`{ ticketId }`）
-- POST `/api/agent/finish`：完成（Body：`{ ticketId, result?, verify4? }`，可驗證電話末 4 碼）
+- POST `/api/agent/finish`：完成（Body：`{ ticketId, result? }`）
 - POST `/api/agent/recall`：重叫（Body：`{ ticketId }`）
 - POST `/api/agent/cancel`：取消（Body：`{ ticketId, reason? }`）
 - POST `/api/agent/transfer`：轉櫃/轉服務（Body：`{ ticketId, toServiceType?, toCounter?, keepStatus? }`）
-- POST `/api/agent/createTicket`：櫃台代客取號（Body：`{ serviceType, phone }`）
+- POST `/api/agent/createTicket`：櫃台代客取號（Body：`{ serviceType }`）
 - GET `/api/agent/history?serviceType=A&limit=50`：歷史紀錄
-- GET `/api/agent/ticket/:id`：取票券詳情（含 phone）
+- GET `/api/agent/ticket/:id`：取票券詳情
 
-管理 agents（需 `x-agent-pin`，且瀏覽器來源需 `x-csrf-token`）：
+管理 agents（需管理員權限，且瀏覽器來源需 `x-csrf-token`）：
 
 - GET `/api/agents`、GET `/api/agents/:id`
 - POST `/api/agents`、PUT `/api/agents/:id`、DELETE `/api/agents/:id`
@@ -155,33 +136,42 @@ Agent / 管理 API（Header 需帶 `x-agent-pin`）：
 ## 資料模型（SQLite）
 
 - `seq(serviceType, ymd, seq)`：各服務別每日流水號
-- `tickets(id, serviceType, number, phone, status, counter, result, createdAt, calledAt, finishedAt)`
+- `tickets(id, serviceType, number, status, counter, result, createdAt, calledAt, finishedAt)`
 - `agents(id, account, name, password[bcrypt], counter, role, active, createdAt, updatedAt)`
+
+### （可選）移除歷史未使用欄位
+若早期版本曾建立 `tickets` 表包含 `phone` 欄位，現行程式已不再使用。需要精簡資料庫可在維護時段：
+
+```sql
+-- 建立新表（不含 phone）
+CREATE TABLE tickets_new AS
+SELECT id, serviceType, number, status, counter, result, createdAt, calledAt, finishedAt
+FROM tickets;
+
+-- 替換
+DROP TABLE tickets;
+ALTER TABLE tickets_new RENAME TO tickets;
+
+-- 視需要重建索引 / 觸發器
+```
+
+若已有備援或僅需邏輯移除，可保留原欄位，無須強制執行離線遷移。
 
 
 ## 常用操作（PowerShell 範例）
 
 - 取號（公共 API）：
 ```powershell
-Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/tickets -ContentType 'application/json' -Body (@{ serviceType='A'; phone='0912345678' } | ConvertTo-Json)
+Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/tickets -ContentType 'application/json' -Body (@{ serviceType='A' } | ConvertTo-Json)
 ```
 
-- 叫下一位（Agent）：
+- 查看等候清單：
 ```powershell
-Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/agent/callNext -ContentType 'application/json' -Body (@{ serviceType='A'; counter='1' } | ConvertTo-Json) -Headers @{ 'x-agent-pin' = '0000' }
-```
-
-- 建立/管理帳號（需 CSRF）：
-```powershell
-$csrf = Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/admin/csrf -Headers @{ 'x-agent-pin' = '0000' }
-Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/agents -ContentType 'application/json' -Body (@{ account='alice'; name='Alice'; password='pass123'; counter='1' } | ConvertTo-Json) -Headers @{ 'x-agent-pin' = '0000'; 'x-csrf-token' = $csrf.csrfToken }
+Invoke-RestMethod -Method Get -Uri http://localhost:3000/api/tickets/waiting?serviceType=A
 ```
 
 
 ## 疑難排解（Troubleshooting）
-
-- 啟動失敗/Exit Code 1，並顯示「需要 AGENT_PIN 環境變數」：
-  - 於 PowerShell 執行：`$env:AGENT_PIN='0000'; npm run dev`
 
 - 連線被拒（EADDRINUSE: address already in use 3000）：
   - 變更埠：`$env:PORT='3001'; npm run dev`
@@ -199,9 +189,6 @@ Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/agents -ContentTyp
 
 - 呼叫管理 API 回傳 `missing csrf token`：
   - 請先呼叫 `/api/admin/csrf` 取得 token，並於瀏覽器來源請求加上 `x-csrf-token`
-
-- 取號回傳 `phone is required`：
-  - 目前設計強制需提供電話（僅數字會被保留），請在 Body 加入 `phone`
 
 
 ## 安全與生產建議
