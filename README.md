@@ -52,7 +52,7 @@ npm install
 
 ```
 PORT=3000
-ALLOWED_ORIGINS=http://localhost:3000
+ALLOWED_ORIGINS=https://your-tunnel-id.devtunnels.ms/
 NODE_ENV=development
 ```
 
@@ -64,10 +64,10 @@ npm run dev
 
 3) 開啟以下頁面
 
-- Kiosk：http://localhost:3000/kiosk/index.html
-- Agent：http://localhost:3000/agent/index.html
-- Lobby：http://localhost:3000/lobby/index.html
-- 管理頁：http://localhost:3000/admin/agents.html
+- Kiosk：https://your-tunnel-id.devtunnels.ms/kiosk/index.html
+- Agent：https://your-tunnel-id.devtunnels.ms/agent/index.html
+- Lobby：https://your-tunnel-id.devtunnels.ms/lobby/index.html
+- 管理頁：https://your-tunnel-id.devtunnels.ms/admin/agents.html
 
 ## 需求與相容性
 
@@ -80,7 +80,7 @@ npm run dev
 
 - PORT（選填，預設 3000）：HTTP 服務埠
 - ALLOWED_ORIGINS（選填）：允許的前端網域清單，逗號分隔，例如：
-  - `http://localhost:3000,http://127.0.0.1:3000`
+  - `https://your-tunnel-id.devtunnels.ms/,http://127.0.0.1:3000`
 - PUBLIC_ORIGIN（選填）：對外公開的網址（用於 QR 與公開連結）
 - NODE_ENV（選填）：`production` 時請搭配更嚴格的 CORS/CSP 設定
 
@@ -190,12 +190,12 @@ ALTER TABLE tickets_new RENAME TO tickets;
 
 - 取號（公共 API）：
 ```powershell
-Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/tickets -ContentType 'application/json' -Body (@{ serviceType='A' } | ConvertTo-Json)
+Invoke-RestMethod -Method Post -Uri https://your-tunnel-id.devtunnels.ms//api/tickets -ContentType 'application/json' -Body (@{ serviceType='A' } | ConvertTo-Json)
 ```
 
 - 查看等候清單：
 ```powershell
-Invoke-RestMethod -Method Get -Uri http://localhost:3000/api/tickets/waiting?serviceType=A
+Invoke-RestMethod -Method Get -Uri https://your-tunnel-id.devtunnels.ms//api/tickets/waiting?serviceType=A
 ```
 
 
@@ -210,7 +210,7 @@ Invoke-RestMethod -Method Get -Uri http://localhost:3000/api/tickets/waiting?ser
   - 請關閉相關程式；必要時重新開機或刪除暫存 `queue.db-wal`/`queue.db-shm`（務必停機/備份）
 
 - CORS 錯誤（CORS origin denied）：
-  - 設定 `ALLOWED_ORIGINS`，例如：`$env:ALLOWED_ORIGINS='http://localhost:3000,http://127.0.0.1:3000'`
+  - 設定 `ALLOWED_ORIGINS`，例如：`$env:ALLOWED_ORIGINS='https://your-tunnel-id.devtunnels.ms/,http://127.0.0.1:3000'`
 
 - Captcha 圖片顯示錯誤或 `sharp` 安裝失敗：
   - `sharp` 為可選；若無法安裝，服務會自動改以 SVG 回傳圖片，功能仍可使用

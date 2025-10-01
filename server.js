@@ -13,14 +13,34 @@ require('dotenv').config();
 
 const PORT = process.env.PORT || 3000;
 
-// ALLOWED_ORIGINS: comma-separated list of allowed origins for CORS (defaults to localhost)
-const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS && process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()).filter(Boolean)) || ['http://localhost:3000'];
+// Production environment validation
+const isProdEnv = process.env.NODE_ENV === 'production';
+
+// ALLOWED_ORIGINS: comma-separated list of allowed origins for CORS
+// In development: automatically allows localhost on current PORT
+// In production: MUST be explicitly set in environment variables
+let ALLOWED_ORIGINS = [];
+if (process.env.ALLOWED_ORIGINS) {
+  ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()).filter(Boolean);
+} else {
+  // Default: only in development, auto-allow localhost
+  if (!isProdEnv) {
+    ALLOWED_ORIGINS = [`http://localhost:${PORT}`];
+  }
+}
+
+// In development, always ensure localhost with current PORT is allowed
+if (!isProdEnv) {
+  const localhostOrigin = `http://localhost:${PORT}`;
+  if (!ALLOWED_ORIGINS.includes(localhostOrigin)) {
+    ALLOWED_ORIGINS.push(localhostOrigin);
+  }
+}
+
 // PUBLIC_ORIGIN: optional explicit public origin (e.g. https://example.com) used when building
 // public links (QR codes). If not set the server will try to infer from incoming requests.
 const PUBLIC_ORIGIN = process.env.PUBLIC_ORIGIN || null;
 
-// Production environment validation
-const isProdEnv = process.env.NODE_ENV === 'production';
 if (isProdEnv) {
   console.log('🔒 Running in PRODUCTION mode');
   
@@ -35,13 +55,14 @@ if (isProdEnv) {
     console.error('Continuing with default values, but this is NOT recommended for production!\n');
   }
   
-  // Warn if using default localhost origins in production
+  // Warn if using localhost origins in production
   if (ALLOWED_ORIGINS.some(o => o.includes('localhost') || o.includes('127.0.0.1'))) {
     console.warn('\n⚠️  WARNING: ALLOWED_ORIGINS contains localhost addresses in production mode!');
     console.warn('   This may be a security risk. Please review your CORS configuration.\n');
   }
 } else {
   console.log('🔧 Running in DEVELOPMENT mode');
+  console.log(`📍 Auto-allowing origin: http://localhost:${PORT}`);
 }
 
 // Ensure db folder exists
@@ -139,17 +160,25 @@ const server = http.createServer(app);
 const { Server } = require('socket.io');
 const io = new Server(server, { cors: { origin: ALLOWED_ORIGINS } });
 
-// CORS: only allow explicit origins; block requests with unknown or missing Origin in production
+// CORS: only allow explicit origins in allowlist; same-origin requests (no Origin header) are allowed
 app.use(cors({
   origin: (origin, cb) => {
-    // In production, require Origin header for security
+    // No Origin header = same-origin request (direct navigation, not CORS)
+    // These should be allowed in both dev and production
     if (!origin) {
-      if (isProdEnv) {
-        // In production, log suspicious requests without Origin
-        console.warn(`⚠️  Request without Origin header blocked in production mode`);
-        return cb(new Error('Origin header required in production'));
-      }
-      // In development, allow requests without origin (curl, Postman, etc.)
+      return cb(null, true);
+    }
+    
+    // In development, auto-allow localhost/127.0.0.1 on any port for convenience
+    if (!isProdEnv) {
+      const isLocalhost = origin.match(/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/);
+      if (isLocalhost) return cb(null, true);
+    }
+    
+    // Also allow localhost on the current PORT (useful for DevTunnel scenarios)
+    // where you're running in "production" mode but testing locally
+    const currentLocalhost = `http://localhost:${PORT}`;
+    if (origin === currentLocalhost) {
       return cb(null, true);
     }
     
