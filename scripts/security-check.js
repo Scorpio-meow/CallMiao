@@ -127,14 +127,20 @@ if (fs.existsSync('.git')) {
   const { execSync } = require('child_process');
   
   try {
-    const tracked = execSync('git ls-files', { encoding: 'utf8' });
+    const tracked = execSync('git ls-files', { encoding: 'utf8' }).split('\n');
     
-    const sensitivePatterns = ['.env', 'queue.db'];
-    sensitivePatterns.forEach(pattern => {
-      if (tracked.includes(pattern)) {
-        error(`敏感檔案 ${pattern} 在版本控制中！請立即移除`);
+    // 檢查敏感檔案（排除 .example 檔案）
+    const sensitivePatterns = [
+      { pattern: /^\.env$/, name: '.env' },
+      { pattern: /\.db$/, name: 'queue.db' }
+    ];
+    
+    sensitivePatterns.forEach(({ pattern, name }) => {
+      const found = tracked.some(file => pattern.test(file.trim()));
+      if (found) {
+        error(`敏感檔案 ${name} 在版本控制中！請立即移除`);
       } else {
-        success(`敏感檔案 ${pattern} 未在版本控制中`);
+        success(`敏感檔案 ${name} 未在版本控制中`);
       }
     });
   } catch (err) {
