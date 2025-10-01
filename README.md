@@ -12,6 +12,34 @@
 
 ## 快速開始（Windows PowerShell）
 
+**重要**：首次啟動前請先完成安全配置！
+
+### 🔒 安全配置（必須）
+
+1) **設定環境變數**
+
+```powershell
+# 複製環境變數範本
+Copy-Item .env.example.new .env
+
+# 編輯 .env 檔案，設定您的配置
+notepad .env
+```
+
+2) **執行安全檢查**
+
+```powershell
+npm run security-check
+```
+
+3) **建立管理員帳號**
+
+```powershell
+npm run create-admin
+```
+
+### 🚀 啟動系統
+
 1) 安裝相依套件
 
 ```powershell
@@ -193,12 +221,43 @@ Invoke-RestMethod -Method Get -Uri http://localhost:3000/api/tickets/waiting?ser
 
 ## 安全與生產建議
 
-- Captcha 暫存於記憶體，建議改為 Redis/DB 做分散式與重啟持久化
-- 登入驗證使用 `agents` 表與 bcrypt 密碼雜湊；請搭配公司 SSO/LDAP 或自有帳號系統
-- 收緊 CORS/CSP、加上 HTTPS 與反向代理（Nginx/Ingress）
-- 監控與日誌：建議整合 morgan/winston 與 Sentry/Elastic 方案
+### 🔒 安全性更新（2025-10-01）
 
-更多安全指引：`Security-Guidelines_Traditional-Chinese.md`、`Security-Guidelines-Explanation_Traditional-Chinese.md`、`security-fixes.md`
+本系統已進行全面的安全強化，包含：
+- ✅ 環境變數保護與自動驗證
+- ✅ 生產環境 CORS 嚴格檢查
+- ✅ 錯誤處理改善，避免資訊洩漏
+- ✅ 前端輸入驗證工具
+- ✅ 自動安全檢查腳本
+
+**詳細資訊**：
+- **安全更新說明**：[SECURITY-UPDATE.md](./SECURITY-UPDATE.md)
+- **部署檢查清單**：[SECURITY-DEPLOYMENT.md](./SECURITY-DEPLOYMENT.md)
+- **安全開發守則**：[Security-Guidelines_Traditional-Chinese.md](./Security-Guidelines_Traditional-Chinese.md)
+
+### 📝 部署前檢查清單
+
+- [ ] 已設定 `.env` 並填入正確的生產環境配置
+- [ ] 已執行 `npm run security-check` 無錯誤
+- [ ] `NODE_ENV` 設為 `production`
+- [ ] `ALLOWED_ORIGINS` 設定為實際網域（移除 localhost）
+- [ ] `PUBLIC_ORIGIN` 設定為公開網址
+- [ ] 已建立管理員帳號並更改預設密碼
+- [ ] 已設定 HTTPS（透過 Nginx/Apache）
+- [ ] 已配置防火牆規則
+- [ ] 已設定自動備份機制
+
+### 🛡️ 生產環境建議
+
+- **反向代理**：使用 Nginx 或 Apache 配置 SSL/TLS
+- **監控與日誌**：整合 PM2 或專業日誌服務
+- **備份策略**：每日自動備份資料庫，異地儲存
+
+更多安全指引：
+- **最新安全更新**：[SECURITY-UPDATE.md](./SECURITY-UPDATE.md)
+- **部署安全檢查清單**：[SECURITY-DEPLOYMENT.md](./SECURITY-DEPLOYMENT.md)
+- **安全開發守則**：[Security-Guidelines_Traditional-Chinese.md](./Security-Guidelines_Traditional-Chinese.md)
+- **詳細說明文件**：[Security-Guidelines-Explanation_Traditional-Chinese.md](./Security-Guidelines-Explanation_Traditional-Chinese.md)
 
 
 ## 套件腳本

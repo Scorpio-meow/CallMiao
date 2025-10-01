@@ -6,7 +6,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "security-check": "node scripts/security-check.js",
+    "create-admin": "node scripts/create_admin.js"
   },
   "author": "",
   "license": "MIT",

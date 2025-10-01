@@ -19,6 +19,31 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS && process.env.ALLOWED_ORIG
 // public links (QR codes). If not set the server will try to infer from incoming requests.
 const PUBLIC_ORIGIN = process.env.PUBLIC_ORIGIN || null;
 
+// Production environment validation
+const isProdEnv = process.env.NODE_ENV === 'production';
+if (isProdEnv) {
+  console.log('🔒 Running in PRODUCTION mode');
+  
+  // Validate required environment variables
+  const requiredEnvVars = ['ALLOWED_ORIGINS', 'PUBLIC_ORIGIN'];
+  const missing = requiredEnvVars.filter(key => !process.env[key]);
+  
+  if (missing.length > 0) {
+    console.error('\n⚠️  SECURITY WARNING: Production environment requires the following environment variables:');
+    missing.forEach(key => console.error(`   - ${key}`));
+    console.error('\nPlease set these in your .env file or environment configuration.');
+    console.error('Continuing with default values, but this is NOT recommended for production!\n');
+  }
+  
+  // Warn if using default localhost origins in production
+  if (ALLOWED_ORIGINS.some(o => o.includes('localhost') || o.includes('127.0.0.1'))) {
+    console.warn('\n⚠️  WARNING: ALLOWED_ORIGINS contains localhost addresses in production mode!');
+    console.warn('   This may be a security risk. Please review your CORS configuration.\n');
+  }
+} else {
+  console.log('🔧 Running in DEVELOPMENT mode');
+}
+
 // Ensure db folder exists
 const dbDir = path.join(__dirname, 'db');
 if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
@@ -117,9 +142,22 @@ const io = new Server(server, { cors: { origin: ALLOWED_ORIGINS } });
 // CORS: only allow explicit origins; block requests with unknown or missing Origin in production
 app.use(cors({
   origin: (origin, cb) => {
-    // allow requests with no origin (curl, server-to-server) or allowlist matches
-    if (!origin) return cb(null, true);
+    // In production, require Origin header for security
+    if (!origin) {
+      if (isProdEnv) {
+        // In production, log suspicious requests without Origin
+        console.warn(`⚠️  Request without Origin header blocked in production mode`);
+        return cb(new Error('Origin header required in production'));
+      }
+      // In development, allow requests without origin (curl, Postman, etc.)
+      return cb(null, true);
+    }
+    
+    // Check if origin is in allowlist
     if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+    
+    // Log denied origins for security monitoring
+    console.warn(`⚠️  CORS blocked: ${origin} (not in allowlist)`);
     return cb(new Error('CORS origin denied'));
   },
   credentials: true
@@ -222,7 +260,8 @@ app.get('/api/captcha/image/:token', captchaLimiter, async (req, res) => {
       res.send(svg);
     }
   } catch (err) {
-    console.error('captcha image error', err);
+    // Log detailed error for debugging, but send generic message to client
+    console.error('Captcha image generation error:', isProdEnv ? err.message : err);
     res.status(500).send('captcha error');
   }
 });
@@ -272,7 +311,7 @@ app.post('/api/agents', requireCsrf, (req, res) => {
     res.json({ agent: row });
   } catch (err) {
     if (err && err.code === 'SQLITE_CONSTRAINT_UNIQUE') return res.status(400).json({ error: 'account exists' });
-    console.error('create agent error', err);
+    console.error('Create agent error:', isProdEnv ? err.message : err);
     res.status(500).json({ error: 'create failed' });
   }
 });
@@ -414,7 +453,7 @@ app.post('/api/tickets', (req, res) => {
     emitQueueUpdate(serviceType.toUpperCase());
     res.json({ ticket });
   } catch (err) {
-    console.error('create ticket error', err && err.stack || err);
+    console.error('Create ticket error:', isProdEnv ? err.message : (err && err.stack || err));
     res.status(500).json({ error: 'create failed' });
   }
 });
@@ -606,7 +645,7 @@ app.post('/api/agent/createTicket', requireAgentAuth, (req, res) => {
     emitQueueUpdate(serviceType.toUpperCase());
     res.json({ ticket });
   } catch (err) {
-    console.error('agent create ticket error', err && err.stack || err);
+    console.error('Agent create ticket error:', isProdEnv ? err.message : (err && err.stack || err));
     res.status(500).json({ error: 'create failed' });
   }
 });
@@ -665,7 +704,7 @@ app.post('/api/agent/message', requireAgentAuth, (req, res) => {
     io.emit('agent:message', payload);
     res.json({ ok: true });
   } catch (err) {
-    console.error('agent message error', err);
+    console.error('Agent message error:', isProdEnv ? err.message : err);
     res.status(500).json({ error: 'message send failed' });
   }
 });
