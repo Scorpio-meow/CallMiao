@@ -11,7 +11,9 @@
 echo "🔍 執行安全檢查..."
 
 # 檢查是否嘗試提交敏感檔案
-SENSITIVE_FILES=$(git diff --cached --name-only | grep -E '\.env$|\.env\..*|db/.*\.db|db/.*\.db-wal|db/.*\.db-shm|.*\.pem$|.*\.key$|.*\.p12$')
+# 允許: .env.example, .env.example.*（範本檔案）
+# 禁止: .env, .env.local, .env.production 等（實際配置檔）
+SENSITIVE_FILES=$(git diff --cached --name-only | grep -E '^\.env$|^\.env\.local$|^\.env\.production$|^\.env\.development$|db/.*\.db$|db/.*\.db-wal$|db/.*\.db-shm$|db/.*\.bak$|.*\.pem$|.*\.key$|.*\.p12$' | grep -v '\.env\.example')
 
 if [ -n "$SENSITIVE_FILES" ]; then
     echo ""
