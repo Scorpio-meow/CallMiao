@@ -5,12 +5,12 @@
 class AuthChecker {
   constructor(options = {}) {
     this.options = {
-      requiredItems: ['agent_name', 'agent_account'],
+      requiredItems: ['ui_agent_name', 'ui_agent_account'],
       loginPath: '/login/index.html',
       skipRedirect: false,
       ...options
     };
-    
+
     this.urlManager = window.URLManager;
   }
 
@@ -19,7 +19,8 @@ class AuthChecker {
    */
   checkRequiredItems() {
     const missing = this.options.requiredItems.filter(key => {
-      const value = sessionStorage.getItem(key);
+      // support both legacy and new ui_ prefixed keys during transition
+      const value = sessionStorage.getItem(key) || sessionStorage.getItem(key.replace(/^ui_/, ''));
       return !value || value.trim() === '';
     });
 
@@ -30,23 +31,26 @@ class AuthChecker {
   }
 
   /**
-   * 取得當前使用者資訊
+   * 取得當前使用者資訊（僅供 UI 顯示）
+   * ⚠️ 注意：這些資料來自 sessionStorage，僅用於前端顯示
+   * 實際的認證狀態由後端 session 控制
    */
   getCurrentUser() {
     return {
-      name: sessionStorage.getItem('agent_name') || '',
-      account: sessionStorage.getItem('agent_account') || '',
-      counter: sessionStorage.getItem('agent_counter') || '',
-      role: sessionStorage.getItem('agent_role') || '',
-      id: sessionStorage.getItem('agent_id') || ''
+      name: sessionStorage.getItem('ui_agent_name') || '',
+      account: sessionStorage.getItem('ui_agent_account') || '',
+      counter: sessionStorage.getItem('ui_agent_counter') || '',
+      role: sessionStorage.getItem('ui_agent_role') || '',
+      id: sessionStorage.getItem('ui_agent_id') || ''
     };
   }
 
   /**
-   * 檢查使用者是否為管理員
+   * 檢查使用者是否為管理員（僅供 UI 顯示判斷）
+   * ⚠️ 注意：實際權限檢查由後端執行
    */
   isAdmin() {
-    return sessionStorage.getItem('agent_role') === 'admin';
+    return sessionStorage.getItem('ui_agent_role') === 'admin';
   }
 
   /**
@@ -54,17 +58,17 @@ class AuthChecker {
    */
   async checkAuthAndRedirect() {
     const { isValid, missing } = this.checkRequiredItems();
-    
+
     if (!isValid) {
       console.log('AuthChecker - 認證檢查失敗，缺少:', missing);
-      
+
       if (!this.options.skipRedirect && this.urlManager) {
         await this.urlManager.redirectToLogin();
       }
-      
+
       return false;
     }
-    
+
     console.log('AuthChecker - 認證檢查通過');
     return true;
   }
@@ -73,16 +77,16 @@ class AuthChecker {
    * 登出並清除所有相關 sessionStorage
    */
   async logout() {
-    const keys = ['agent_name', 'agent_account', 'agent_counter', 'agent_role', 'agent_id'];
-    keys.forEach(key => sessionStorage.removeItem(key));
-    
-    console.log('AuthChecker - 已登出');
-    
-    if (this.urlManager) {
-      await this.urlManager.safeRedirect(this.options.loginPath);
-    } else {
-      location.href = this.options.loginPath;
+    try {
+      // 呼叫後端登出 API（這才是真正的登出）
+      await fetch('/api/logout', { method: 'POST', credentials: 'include' });
+    } catch (e) {
+      console.warn('Logout API error:', e);
     }
+
+    // 清除 UI 顯示用的 sessionStorage
+    const keys = ['ui_agent_name', 'ui_agent_account', 'ui_agent_counter', 'ui_agent_role', 'ui_agent_id'];
+    keys.forEach(key => sessionStorage.removeItem(key));
   }
 
   /**
@@ -93,7 +97,7 @@ class AuthChecker {
     if (this.urlManager && !this.urlManager.isConfigLoaded) {
       await this.urlManager.loadConfig();
     }
-    
+
     return await this.checkAuthAndRedirect();
   }
 }
@@ -102,30 +106,30 @@ class AuthChecker {
 window.AuthChecker = AuthChecker;
 
 // 便利函數：快速檢查認證
-window.checkAuth = async function(options = {}) {
-  const checker = new AuthChecker(options);
-  return await checker.init();
-};
+window.checkAuth = async function (options = {}) {
+    const checker = new AuthChecker(options);
+    return await checker.init();
+  };
 
 // 便利函數：快速登出
-window.logout = async function() {
-  const checker = new AuthChecker();
-  await checker.logout();
-};
+window.logout = async function () {
+    const checker = new AuthChecker();
+    await checker.logout();
+  };
 
 // 便利函數：取得當前使用者
-window.getCurrentUser = function() {
-  const checker = new AuthChecker();
-  return checker.getCurrentUser();
-};
+window.getCurrentUser = function () {
+    const checker = new AuthChecker();
+    return checker.getCurrentUser();
+  };
 
 // 便利函數：檢查是否為管理員
-window.isAdmin = function() {
-  const checker = new AuthChecker();
-  return checker.isAdmin();
-};
+window.isAdmin = function () {
+    const checker = new AuthChecker();
+    return checker.isAdmin();
+  };
 
-// 匯出供模組使用
-if (typeof module !== 'undefined' && module.exports) {
+  // 匯出供模組使用
+  if(typeof module !== 'undefined' && module.exports) {
   module.exports = AuthChecker;
 }

@@ -105,9 +105,9 @@
 
     // Check if user is logged in and has appropriate permissions
     async function checkLoginAndPermissions() {
-      const agentName = sessionStorage.getItem('agent_name');
-      const agentRole = sessionStorage.getItem('agent_role');
-      const agentAccount = sessionStorage.getItem('agent_account');
+  const agentName = sessionStorage.getItem('ui_agent_name');
+  const agentRole = sessionStorage.getItem('ui_agent_role');
+  const agentAccount = sessionStorage.getItem('ui_agent_account');
       
       if (!agentName || !agentAccount) {
         // 使用 URL Manager 跳轉到登入頁面
@@ -129,17 +129,12 @@
     }
 
     async function apiFetch(url, opts = {}) {
-      opts = Object.assign({ headers: {} }, opts);
+      opts = Object.assign({ 
+        headers: {},
+        credentials: 'include' // Important: include cookies for session
+      }, opts);
       
       if (!opts.headers['Content-Type']) opts.headers['Content-Type'] = 'application/json';
-      
-      // Add agent authentication for agent profile API
-      const agentAccount = sessionStorage.getItem('agent_account');
-      const agentName = sessionStorage.getItem('agent_name');
-      if (agentAccount && url.includes('/api/agent/')) {
-        opts.headers['x-agent-account'] = agentAccount;
-        opts.headers['x-agent-name'] = encodeURIComponent(agentName);
-      }
       
       return fetch(url, opts);
     }
@@ -194,11 +189,11 @@
         document.getElementById('profileDisplayName').textContent = data.agent.name || '-';
         document.getElementById('profileDisplayCounter').textContent = data.agent.counter || '-';
         
-        // Update session storage to ensure consistency
-        sessionStorage.setItem('agent_name', data.agent.name || '');
-        sessionStorage.setItem('agent_counter', data.agent.counter || '');
-        sessionStorage.setItem('agent_role', data.agent.role || '');
-        sessionStorage.setItem('agent_account', data.agent.account || '');
+        // ⚠️ 僅供 UI 顯示用途，實際認證由後端 session 處理
+        sessionStorage.setItem('ui_agent_name', data.agent.name || '');
+        sessionStorage.setItem('ui_agent_counter', data.agent.counter || '');
+        sessionStorage.setItem('ui_agent_role', data.agent.role || '');
+        sessionStorage.setItem('ui_agent_account', data.agent.account || '');
       } catch (err) {
         console.error(err);
         showMsg('載入個人資料失敗', true);
@@ -264,7 +259,7 @@
       document.getElementById('adminSection').classList.remove('hidden');
       document.getElementById('profileSection').classList.add('hidden');
       document.getElementById('pageTitle').textContent = '帳號管理（管理員）';
-      document.getElementById('loginStatus').textContent = `已登入為管理員 - ${sessionStorage.getItem('agent_name')}`;
+  document.getElementById('loginStatus').textContent = `已登入為管理員 - ${sessionStorage.getItem('ui_agent_name')}`;
       loadAgents();
     }
 
@@ -274,17 +269,29 @@
       document.getElementById('adminSection').classList.add('hidden');
       document.getElementById('profileSection').classList.remove('hidden');
       document.getElementById('pageTitle').textContent = '個人資料管理';
-      document.getElementById('loginStatus').textContent = `已登入為櫃員 - ${sessionStorage.getItem('agent_name')}`;
+  document.getElementById('loginStatus').textContent = `已登入為櫃員 - ${sessionStorage.getItem('ui_agent_name')}`;
       loadAgentProfile();
     }
 
     // Logout function
     async function logout() {
-      sessionStorage.removeItem('agent_name');
-      sessionStorage.removeItem('agent_account');
-      sessionStorage.removeItem('agent_counter');
-      sessionStorage.removeItem('agent_role');
-      sessionStorage.removeItem('agent_id');
+      // Call server logout API to destroy session
+      try {
+        await fetch('/api/logout', { 
+          method: 'POST',
+          credentials: 'include'
+        });
+      } catch (err) {
+        console.warn('Logout API error:', err);
+      }
+      
+      // Clear sessionStorage
+  // Clear UI-only sessionStorage keys (server session destroyed via API elsewhere)
+  sessionStorage.removeItem('ui_agent_name');
+  sessionStorage.removeItem('ui_agent_account');
+  sessionStorage.removeItem('ui_agent_counter');
+  sessionStorage.removeItem('ui_agent_role');
+  sessionStorage.removeItem('ui_agent_id');
       
       // 使用 URL Manager 跳轉到登入頁面
       await urlManager.safeRedirect('/login/index.html');
@@ -345,12 +352,12 @@
         showMsg('更新成功');
         document.getElementById('profilePassword').value = '';
         
-        // Update session storage if data changed
+        // Update UI display (not for authentication)
         if (body.name) {
-          sessionStorage.setItem('agent_name', body.name);
+          sessionStorage.setItem('ui_agent_name', body.name);
         }
         if (body.counter) {
-          sessionStorage.setItem('agent_counter', body.counter);
+          sessionStorage.setItem('ui_agent_counter', body.counter);
         }
         
         // Reload profile to sync all display information

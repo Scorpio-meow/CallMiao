@@ -332,9 +332,11 @@ class URLManager {
   /**
    * 檢查是否需要跳轉到登入頁面
    */
-  checkAuthAndRedirect(requiredAuth = ['agent_name', 'agent_account']) {
-    // 檢查必要的認證資訊
-    const missing = requiredAuth.filter(key => !sessionStorage.getItem(key));
+  checkAuthAndRedirect(requiredAuth = ['ui_agent_name', 'ui_agent_account']) {
+    // 檢查必要的認證資訊，支援遺留鍵名
+    const missing = requiredAuth.filter(key => {
+      return !(sessionStorage.getItem(key) || sessionStorage.getItem(key.replace(/^ui_/, '')));
+    });
     
     if (missing.length > 0) {
       console.log('URL Manager - 缺少認證資訊:', missing);

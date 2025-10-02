@@ -184,13 +184,13 @@
             cancelled: '已取消'
         };
         function statusLabel(s) { return STATUS_LABEL[s] || (s || '-'); }
-        let agentName = sessionStorage.getItem('agent_name') || '';
-        let savedCounter = sessionStorage.getItem('agent_counter') || '';
+    let agentName = sessionStorage.getItem('ui_agent_name') || '';
+    let savedCounter = sessionStorage.getItem('ui_agent_counter') || '';
 
         function updateAgentNameUI() { $('#agentNameDisplay').textContent = agentName || '—'; }
 
         function initializeCounterDisplay() {
-            const savedCounter = sessionStorage.getItem('agent_counter') || '';
+            const savedCounter = sessionStorage.getItem('ui_agent_counter') || '';
             const counterEl = document.querySelector('#counter');
             if (counterEl) {
                 counterEl.value = savedCounter || '';
@@ -219,8 +219,9 @@
             if (!nm) { alert('請輸入姓名'); return; }
             if (!ctr) { alert('請輸入櫃台號'); return; }
             agentName = nm; savedCounter = ctr;
-            if (agentName) sessionStorage.setItem('agent_name', agentName);
-            if (savedCounter) sessionStorage.setItem('agent_counter', savedCounter);
+            // ⚠️ 僅供 UI 顯示用途，實際認證由後端 session 處理
+            if (agentName) sessionStorage.setItem('ui_agent_name', agentName);
+            if (savedCounter) sessionStorage.setItem('ui_agent_counter', savedCounter);
             // Update the counter display
             initializeCounterDisplay();
             document.querySelector('#authStatus').textContent = '已登入';
@@ -228,18 +229,32 @@
             hideOverlay();
             refresh();
         };
-        document.querySelector('#logoutBtn').onclick = () => {
-            sessionStorage.removeItem('agent_name');
-            sessionStorage.removeItem('agent_counter');
+        document.querySelector('#logoutBtn').onclick = async () => {
+            // Call server logout API to destroy session
+            try {
+                await fetch('/api/logout', { method: 'POST' });
+            } catch (err) {
+                console.warn('Logout API error:', err);
+            }
+            
+            // Clear UI-only sessionStorage keys (server session destroyed via API)
+            sessionStorage.removeItem('ui_agent_name');
+            sessionStorage.removeItem('ui_agent_account');
+            sessionStorage.removeItem('ui_agent_counter');
+            sessionStorage.removeItem('ui_agent_id');
+            sessionStorage.removeItem('ui_agent_role');
+            
             document.querySelector('#authStatus').textContent = '';
             updateAgentNameUI();
+            
             // Clear counter display
             const counterEl = document.querySelector('#counter');
             if (counterEl) {
                 counterEl.value = '';
                 counterEl.placeholder = '未設定（請聯絡管理員）';
             }
-            // After logout, send user back to the login page handled by /public/login
+            
+            // Redirect to login page
             window.location.href = '/login/index.html';
         };
 
@@ -252,21 +267,22 @@
             setTimeout(() => { el.classList.remove('show'); el.remove(); }, 3000);
         }
 
-        // apiFetch wrapper: attach agent authentication headers
+        // apiFetch wrapper: Now authentication is handled by server-side session cookies
+        // We no longer need to send custom headers for authentication
         async function apiFetch(url, opts = {}) {
-            opts = Object.assign({ headers: {} }, opts);
-            const account = sessionStorage.getItem('agent_account');
-            const name = sessionStorage.getItem('agent_name');
-            
-            if (account && name) {
-                opts.headers['x-agent-account'] = account;
-                opts.headers['x-agent-name'] = encodeURIComponent(name);
-            }
+            opts = Object.assign({ 
+                headers: {},
+                credentials: 'include' // Important: include cookies for session
+            }, opts);
             
             let res = await fetch(url, opts);
             if (res.status === 401) {
                 toast('認證失敗，請重新登入', 'error');
-                window.location.href = '/login/index.html';
+                // Clear sessionStorage
+                sessionStorage.clear();
+                setTimeout(() => {
+                    window.location.href = '/login/index.html';
+                }, 1500);
                 return res;
             }
             return res;
@@ -456,7 +472,7 @@
 
             // If still no selection, auto-select current call for this counter (if any).
             if (!cur) {
-                const myCounter = sessionStorage.getItem('agent_counter') || document.querySelector('#counter')?.value || '';
+                const myCounter = sessionStorage.getItem('ui_agent_counter') || document.querySelector('#counter')?.value || '';
                 if (myCounter) {
                     cur = (data.currentCalls || []).find(c => String(c.counter) === String(myCounter));
                 }
@@ -533,7 +549,7 @@
         // Join rooms for targeted messaging once connected
         socket.on('connect', () => {
             try {
-                const ctr = sessionStorage.getItem('agent_counter') || '';
+                const ctr = sessionStorage.getItem('ui_agent_counter') || '';
                 if (ctr) socket.emit('join', `counter:${ctr}`);
                 if (agentName) socket.emit('join', `agent:${agentName}`);
             } catch (e) { /* noop */ }
@@ -547,7 +563,7 @@
                 // 若為自己剛發送的訊息，避免重複顯示（已顯示「已送出訊息」）
                 if (from && agentName && String(from) === String(agentName)) return;
                 // If message has a target and doesn't match this client, ignore
-                const myCounter = sessionStorage.getItem('agent_counter') || '';
+                const myCounter = sessionStorage.getItem('ui_agent_counter') || '';
                 if (toCounter && String(toCounter) !== String(myCounter)) return;
                 if (toAgent && agentName && String(toAgent) !== String(agentName)) return;
                 // Otherwise show

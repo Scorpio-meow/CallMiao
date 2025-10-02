@@ -48,19 +48,26 @@ if (!fs.existsSync('.env')) {
     }
   });
   
-  // 檢查生產環境配置
-  if (/NODE_ENV=production/i.test(envContent)) {
+  // 檢查生產環境配置（只檢查未註解的行）
+  const activeEnvMatch = envContent.match(/^NODE_ENV=(.+)$/m);
+  const isProduction = activeEnvMatch && activeEnvMatch[1].trim().toLowerCase() === 'production';
+  
+  if (isProduction) {
     console.log('\n🔒 偵測到生產環境設定，進行額外檢查...');
     
-    if (!/PUBLIC_ORIGIN=https?:\/\/.+/.test(envContent)) {
+    // 只檢查未註解的 PUBLIC_ORIGIN
+    const activePubOrigin = envContent.match(/^PUBLIC_ORIGIN=(.*)$/m);
+    if (!activePubOrigin || !activePubOrigin[1].trim()) {
       error('生產環境必須設定 PUBLIC_ORIGIN');
     }
     
-    if (/localhost|127\.0\.0\.1/i.test(envContent)) {
+    // 只檢查未註解的 ALLOWED_ORIGINS
+    const activeAllowedOrigins = envContent.match(/^ALLOWED_ORIGINS=(.*)$/m);
+    if (activeAllowedOrigins && /localhost|127\.0\.0\.1/i.test(activeAllowedOrigins[1])) {
       error('生產環境的 ALLOWED_ORIGINS 不應包含 localhost');
     }
     
-    if (!/ALLOWED_ORIGINS=https:\/\/.+/.test(envContent)) {
+    if (activeAllowedOrigins && !/https:\/\/.+/.test(activeAllowedOrigins[1])) {
       warning('生產環境建議使用 HTTPS');
     }
   }

@@ -4,6 +4,8 @@ const http = require('http');
 const express = require('express');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
+const session = require('express-session');
+const helmet = require('helmet');
 const dayjs = require('dayjs');
 const QRCode = require('qrcode');
 const Database = require('better-sqlite3');
@@ -15,6 +17,17 @@ const PORT = process.env.PORT || 3000;
 
 // Production environment validation
 const isProdEnv = process.env.NODE_ENV === 'production';
+
+const SESSION_SECRET = process.env.SESSION_SECRET || 'fallback-insecure-secret-change-this';
+
+// Validate SESSION_SECRET in production
+if (isProdEnv && SESSION_SECRET === 'fallback-insecure-secret-change-this') {
+  console.error('\n⚠️  CRITICAL: SESSION_SECRET is not set in production!');
+  console.error('   Please set SESSION_SECRET in your .env file.');
+  console.error('   Generate one using: [Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 }))\n');
+  process.exit(1);
+}
+
 
 // ALLOWED_ORIGINS: comma-separated list of allowed origins for CORS
 // In development: automatically allows localhost on current PORT
@@ -194,6 +207,39 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Session configuration - MUST be before routes
+const SQLiteStore = require('connect-sqlite3')(session);
+app.use(session({
+  store: new SQLiteStore({
+    db: 'sessions.db',
+    dir: './db'
+  }),
+  secret: SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: isProdEnv, // Require HTTPS in production
+    httpOnly: true,    // Prevent JavaScript access (XSS protection)
+    maxAge: 8 * 60 * 60 * 1000, // 8 hours
+    sameSite: 'lax'
+  },
+  name: 'queueSessionId' // Custom session cookie name
+}));
+
+// Security headers using helmet
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "blob:"],
+      fontSrc: ["'self'", "data:", "https://r2cdn.perplexity.ai"],
+      connectSrc: ["'self'", "ws:", "wss:"]
+    }
+  }
+}));
+
 // Minimal CSP to allow our local app (scripts/styles inline for demo) and websockets
 app.use((req, res, next) => {
   res.setHeader(
@@ -311,7 +357,43 @@ app.post('/api/login', loginLimiter, (req, res) => {
   if (!user) return res.status(401).json({ error: 'invalid credentials' });
   const ok = (user.password && password) ? bcrypt.compareSync(String(password), String(user.password)) : false;
   if (!ok) return res.status(401).json({ error: 'invalid credentials' });
-  return res.json({ ok: true, agent: { id: user.id, account: user.account, name: user.name, counter: user.counter, role: user.role } });
+  
+  // Store authentication info in server-side session
+  req.session.agent = {
+    id: user.id,
+    account: user.account,
+    name: user.name,
+    counter: user.counter,
+    role: user.role
+  };
+  
+  // Return agent info to frontend (frontend can still use sessionStorage for UI display)
+  return res.json({ 
+    ok: true, 
+    agent: {
+      id: user.id,
+      account: user.account,
+      name: user.name,
+      counter: user.counter,
+      role: user.role
+    }
+  });
+});
+
+// Logout endpoint: destroy server-side session
+app.post('/api/logout', (req, res) => {
+  if (req.session) {
+    req.session.destroy(err => {
+      if (err) {
+        console.error('Logout error:', err);
+        return res.status(500).json({ error: 'logout failed' });
+      }
+      res.clearCookie('queueSessionId');
+      res.json({ ok: true });
+    });
+  } else {
+    res.json({ ok: true });
+  }
 });
 
 // Issue a CSRF token for admin UI
@@ -520,21 +602,27 @@ app.get('/api/overview', (req, res) => {
 });
 
 function requireAgentAuth(req, res, next) {
-  // Simple agent authentication without PIN
-  const agentAccount = req.get('x-agent-account');
-  const agentName = req.get('x-agent-name');
-  
-  // Require agent authentication
-  if (!agentAccount || !agentName) {
-    return res.status(401).json({ error: 'unauthorized - missing agent credentials' });
+  // Check server-side session instead of headers
+  if (!req.session || !req.session.agent) {
+    return res.status(401).json({ error: 'unauthorized - not logged in' });
   }
   
-  // Verify agent exists and is active
-  const decodedName = decodeURIComponent(agentName);
-  const agent = db.prepare('SELECT * FROM agents WHERE account=? AND name=? AND active=1').get(agentAccount, decodedName);
+  // Verify agent still exists and is active
+  const agent = db.prepare('SELECT * FROM agents WHERE id=? AND active=1').get(req.session.agent.id);
   if (!agent) {
-    return res.status(401).json({ error: 'unauthorized - invalid agent credentials' });
+    // Account was disabled or deleted, destroy session
+    req.session.destroy();
+    return res.status(401).json({ error: 'unauthorized - account disabled' });
   }
+  
+  // Update session with latest agent info
+  req.session.agent = {
+    id: agent.id,
+    account: agent.account,
+    name: agent.name,
+    counter: agent.counter,
+    role: agent.role
+  };
   
   // Store agent info for use in route handler
   req.authenticatedAgent = agent;
@@ -551,6 +639,16 @@ function requireCsrf(req, res, next) {
     if (!rec) return res.status(403).json({ error: 'invalid or expired csrf token' });
     // token is valid
   }
+  
+  // Additionally check if user is logged in and is admin (for admin-only endpoints)
+  if (!req.session || !req.session.agent) {
+    return res.status(401).json({ error: 'unauthorized - not logged in' });
+  }
+  
+  if (req.session.agent.role !== 'admin') {
+    return res.status(403).json({ error: 'forbidden - admin only' });
+  }
+  
   next();
 }
 
