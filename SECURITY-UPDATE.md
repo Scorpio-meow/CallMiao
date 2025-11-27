@@ -203,6 +203,9 @@ npm run security-check
 - ✅ 新增自動安全檢查腳本
 - ✅ 建立安全部署指南
 
+### 2025-11-27
+- 🔄 修補 Transitive Dependency: `cookie` (npm) 的安全性問題，已將 `cookie` 鎖定為 `0.7.0`（使用 npm overrides）。此舉可防止 cookie 名稱、path 或 domain 中包含惡意字元導致的繞過或 XSS 風險。
+
 ---
 
 ## 📖 延伸閱讀
