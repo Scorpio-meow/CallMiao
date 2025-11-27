@@ -1,56 +1,37 @@
-/**
- * URL Manager - 自動檢查並選擇適當的網址進行跳轉
- * 支援本地網址 (ALLOWED_ORIGINS) 和外網址 (PUBLIC_ORIGIN) 的智能切換
- */
 class URLManager {
   constructor() {
     this.config = null;
     this.isConfigLoaded = false;
-
-    // 快取設定 5 分鐘
     this.configCache = {
       data: null,
       timestamp: 0,
-      expiry: 5 * 60 * 1000 // 5 minutes
+      expiry: 5 * 60 * 1000
     };
   }
-
-  /**
-   * 從伺服器載入設定資訊
-   */
   async loadConfig() {
     try {
-      // 檢查快取是否有效
       const now = Date.now();
       if (this.configCache.data && (now - this.configCache.timestamp) < this.configCache.expiry) {
         this.config = this.configCache.data;
         this.isConfigLoaded = true;
         return this.config;
       }
-
       const response = await fetch('/api/config');
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
-
       const config = await response.json();
-
-      // 快取設定
       this.configCache = {
         data: config,
         timestamp: now,
         expiry: this.configCache.expiry
       };
-
       this.config = config;
       this.isConfigLoaded = true;
-
       console.log('URL Manager - 載入設定:', config);
       return config;
     } catch (error) {
       console.error('URL Manager - 載入設定失敗:', error);
-
-      // 使用預設設定
       this.config = {
         publicOrigin: location.origin
       };
@@ -58,14 +39,9 @@ class URLManager {
       return this.config;
     }
   }
-
-  /**
-   * 檢查當前環境類型
-   */
   detectEnvironment() {
     const hostname = location.hostname;
     const protocol = location.protocol;
-
     const env = {
       isLocal: false,
       isDevTunnel: false,
@@ -74,30 +50,19 @@ class URLManager {
       hostname,
       protocol
     };
-
-    // 檢查是否為本地環境
     if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.') || hostname.startsWith('10.')) {
       env.isLocal = true;
       env.isDevelopment = true;
     }
-
-    // 檢查是否為 DevTunnel
     if (hostname.includes('devtunnels.ms')) {
       env.isDevTunnel = true;
       env.isDevelopment = true;
     }
-
-    // 檢查是否為正式環境
     if (!env.isLocal && !env.isDevTunnel) {
       env.isProduction = true;
     }
-
     return env;
   }
-
-  /**
-   * 檢查兩個 URL 是否同源
-   */
   isSameOrigin(url1, url2) {
     try {
       const parsed1 = new URL(url1);
@@ -108,61 +73,40 @@ class URLManager {
       return false;
     }
   }
-
-  /**
-   * 檢查 URL 是否在允許的來源清單中
-   */
   isAllowedOrigin(targetUrl, allowedOrigins = []) {
     try {
       const target = new URL(targetUrl);
       const current = new URL(location.href);
-
-      // 檢查是否同源
       if (target.origin === current.origin) {
         return true;
       }
-
-      // 檢查允許清單
       for (const allowed of allowedOrigins) {
         const allowedUrl = new URL(allowed);
         if (target.origin === allowedUrl.origin) {
           return true;
         }
       }
-
-      // 特殊規則：DevTunnel 環境
       const env = this.detectEnvironment();
       if (env.isDevTunnel) {
         const targetHost = target.hostname;
         const currentHost = current.hostname;
-
-        // 允許 DevTunnel 內部跳轉
         if (targetHost.includes('devtunnels.ms') && currentHost.includes('devtunnels.ms')) {
           return true;
         }
       }
-
-      // 特殊規則：本地環境
       if (env.isLocal) {
         const targetHost = target.hostname;
-
-        // 允許本地網址之間跳轉
         if (targetHost === 'localhost' || targetHost === '127.0.0.1' ||
           targetHost.startsWith('192.168.') || targetHost.startsWith('10.')) {
           return true;
         }
       }
-
       return false;
     } catch (error) {
       console.warn('URL Manager - 允許來源檢查失敗:', error);
       return false;
     }
   }
-
-  /**
-   * Validate the URL scheme and ensure it's http(s) only (reject javascript:, data:, file:, etc.)
-   */
   isSafeScheme(urlStr) {
     try {
       const parsed = new URL(urlStr, location.origin);
@@ -173,46 +117,82 @@ class URLManager {
       return false;
     }
   }
-
-  /**
-   * 建構安全的跳轉 URL
-   */
+  async sanitizeRedirectTarget(targetPath, allowedOrigins = []) {
+    await this.loadConfig();
+    try {
+      const env = this.detectEnvironment();
+      const baseOrigin = (!env.isLocal && !env.isDevTunnel) ? (this.config?.publicOrigin || location.origin) : location.origin;
+      if (typeof targetPath === 'string' && targetPath.startsWith('//')) {
+        console.warn('URL Manager - protocol-relative URL not allowed during sanitize:', targetPath);
+        return null;
+      }
+      const absolute = new URL(targetPath, baseOrigin);
+      if (!this.isSafeScheme(absolute.href)) {
+        console.warn('URL Manager - scheme not allowed during sanitize:', absolute.href);
+        return null;
+      }
+      const currentUrl = new URL(location.href);
+      const normalizePort = (u) => u.port || (u.protocol === 'https:' ? '443' : (u.protocol === 'http:' ? '80' : ''));
+      if (absolute.origin === currentUrl.origin || (absolute.hostname === currentUrl.hostname && normalizePort(absolute) === normalizePort(currentUrl))) {
+        return absolute.href;
+      }
+      const provided = Array.isArray(allowedOrigins) ? allowedOrigins : [allowedOrigins];
+      const mergedAllowed = new Set(provided.filter(Boolean));
+      if (this.config?.publicOrigin) mergedAllowed.add(this.config.publicOrigin);
+      for (const candidate of mergedAllowed) {
+        try {
+          const candUrl = new URL(candidate);
+          if (absolute.origin === candUrl.origin) {
+            return absolute.href;
+          }
+        } catch (e) {
+          const candidateHost = String(candidate).replace(/\s+/g, '');
+          if (absolute.hostname === candidateHost) {
+            return absolute.href;
+          }
+        }
+      }
+      if (env.isDevTunnel) {
+        const curHost = (new URL(location.href)).hostname;
+        if (absolute.hostname.includes('devtunnels.ms') && curHost.includes('devtunnels.ms')) {
+          return absolute.href;
+        }
+      }
+      if (env.isLocal) {
+        const host = absolute.hostname;
+        if (host === 'localhost' || host === '127.0.0.1' || host.startsWith('192.168.') || host.startsWith('10.')) {
+          return absolute.href;
+        }
+      }
+      console.warn('URL Manager - sanitizeRedirectTarget rejected:', absolute.href);
+      return null;
+    } catch (error) {
+      console.warn('URL Manager - sanitizeRedirectTarget failed:', error, targetPath);
+      return null;
+    }
+  }
   async buildRedirectUrl(path, params = {}) {
     await this.loadConfig();
-
     const env = this.detectEnvironment();
     let baseUrl;
-
-    // 標準化路徑
     let normalizedPath = path;
     if (typeof path === 'string') {
-      // 確保路徑以 / 開頭
       if (!normalizedPath.startsWith('/')) {
         normalizedPath = '/' + normalizedPath;
       }
-      // 移除多餘的開頭斜線
       normalizedPath = normalizedPath.replace(/^\/+/, '/');
     }
-
-    // 根據環境選擇基礎 URL
     if (env.isLocal || env.isDevelopment) {
-      // 開發環境：優先使用當前 origin
       baseUrl = location.origin;
     } else {
-      // 正式環境：使用 PUBLIC_ORIGIN（如果有設定）
       baseUrl = this.config.publicOrigin || location.origin;
     }
-
-    // 建構完整 URL
     const url = new URL(normalizedPath, baseUrl);
-
-    // 添加參數
     Object.keys(params).forEach(key => {
       if (params[key] !== null && params[key] !== undefined) {
         url.searchParams.set(key, String(params[key]));
       }
     });
-
     console.log('URL Manager - 建構跳轉 URL:', {
       environment: env,
       baseUrl: baseUrl,
@@ -221,13 +201,8 @@ class URLManager {
       params,
       finalUrl: url.href
     });
-
     return url.href;
   }
-
-  /**
-   * 安全跳轉到指定路徑
-   */
   async safeRedirect(targetPath, options = {}) {
     const {
       replace = false,
@@ -235,57 +210,39 @@ class URLManager {
       fallbackPath = '/agent/index.html',
       allowedOrigins = []
     } = options;
-
     try {
       let targetUrl;
-
-      // 標準化路徑：將 // 開頭的路徑轉換為單個 /
       let normalizedPath = targetPath;
       if (typeof targetPath === 'string' && targetPath.startsWith('//') && !targetPath.startsWith('http')) {
-        normalizedPath = targetPath.substring(1); // 移除開頭的額外 /
+        normalizedPath = targetPath.substring(1);
         console.log('URL Manager - 標準化路徑:', targetPath, '->', normalizedPath);
       }
-
-      // 如果是完整 URL 或 protocol-relative URL
-      if (normalizedPath.startsWith('http://') || normalizedPath.startsWith('https://') || normalizedPath.startsWith('//')) {
-        // Reject protocol-relative URLs (//evil.com)
-        if (normalizedPath.startsWith('//')) {
-          console.warn('URL Manager - protocol-relative URL not allowed:', normalizedPath);
-          targetUrl = await this.buildRedirectUrl(fallbackPath, params);
-        } else if (!this.isSafeScheme(normalizedPath)) {
-          // Reject non http(s) schemes (javascript:, data:, file:, etc.)
-          console.warn('URL Manager - URL scheme not allowed:', normalizedPath);
-          targetUrl = await this.buildRedirectUrl(fallbackPath, params);
-        } else if (!this.isAllowedOrigin(normalizedPath, allowedOrigins)) {
-          // Check allowed origins for absolute URL
-          console.warn('URL Manager - 跨域跳轉被阻止:', normalizedPath);
-          targetUrl = await this.buildRedirectUrl(fallbackPath, params);
+      let safeTarget = null;
+      if (typeof normalizedPath === 'string') {
+        if (/^https?:\/\//i.test(normalizedPath) || normalizedPath.startsWith('//')) {
+          safeTarget = await this.sanitizeRedirectTarget(normalizedPath, allowedOrigins);
         } else {
-          // Allowed full URL
-          targetUrl = normalizedPath;
+          const built = await this.buildRedirectUrl(normalizedPath, params);
+          safeTarget = await this.sanitizeRedirectTarget(built, allowedOrigins);
         }
-      } else {
-        // 路徑：建構完整 URL
-        targetUrl = await this.buildRedirectUrl(normalizedPath, params);
       }
-
+      if (!safeTarget) {
+        targetUrl = await this.buildRedirectUrl(fallbackPath, params);
+      } else {
+        targetUrl = safeTarget;
+      }
       console.log('URL Manager - 執行跳轉:', {
         original: targetPath,
         final: targetUrl,
         replace
       });
-
-      // 執行跳轉
       if (replace) {
         location.replace(targetUrl);
       } else {
         location.href = targetUrl;
       }
-
     } catch (error) {
       console.error('URL Manager - 跳轉失敗:', error);
-
-      // 錯誤處理：跳轉到後備頁面
       const fallbackUrl = await this.buildRedirectUrl(fallbackPath);
       if (replace) {
         location.replace(fallbackUrl);
@@ -294,46 +251,23 @@ class URLManager {
       }
     }
   }
-
-  /**
-   * 取得當前頁面的 redirect 參數
-   */
   getCurrentRedirectPath() {
-    // 使用相對路徑避免 DevTunnel 環境的問題
-    // 確保路徑格式正確，避免雙斜線問題
     let path = location.pathname + location.search + location.hash;
-
-    // 標準化路徑，移除多餘的斜線
     path = path.replace(/\/+/g, '/');
-
     console.log('URL Manager - 當前重定向路徑:', path);
     return path;
   }
-
-  /**
-   * 建構登入跳轉 URL
-   */
   async buildLoginUrl(redirectPath = null) {
     const redirect = redirectPath || this.getCurrentRedirectPath();
     return await this.buildRedirectUrl('/login/index.html', { redirect });
   }
-
-  /**
-   * 跳轉到登入頁面
-   */
   async redirectToLogin(redirectPath = null) {
     const loginUrl = await this.buildLoginUrl(redirectPath);
     console.log('URL Manager - 跳轉到登入頁面:', loginUrl);
     location.href = loginUrl;
   }
-
-  /**
-   * 登入後跳轉
-   */
   async handleLoginRedirect(redirectParam = null) {
     let redirect = redirectParam || new URLSearchParams(location.search).get('redirect') || '/agent/index.html';
-
-    // 解碼 URL 編碼的字符
     if (typeof redirect === 'string' && redirect.includes('%')) {
       try {
         redirect = decodeURIComponent(redirect);
@@ -342,21 +276,17 @@ class URLManager {
         console.warn('URL Manager - 解碼 redirect 參數失敗:', error);
       }
     }
-    // Trim whitespace and reject obvious control characters
     if (typeof redirect === 'string') {
       redirect = redirect.trim();
-      // reject if contains line breaks or null bytes
       if (/[\u0000\u000a\u000d\u2028\u2029]/.test(redirect)) {
         console.warn('URL Manager - redirect contains control characters, rejecting:', redirect);
         redirect = '/agent/index.html';
       }
-      // Reject protocol-relative urls like //example.com explicitly
       if (redirect.startsWith('//')) {
         console.warn('URL Manager - protocol-relative redirect rejected:', redirect);
         redirect = '/agent/index.html';
       }
     }
-
     await this.safeRedirect(redirect, {
       fallbackPath: '/agent/index.html',
       allowedOrigins: [
@@ -365,30 +295,21 @@ class URLManager {
       ].filter(Boolean)
     });
   }
-
-  /**
-   * 檢查是否需要跳轉到登入頁面
-   */
   checkAuthAndRedirect(requiredAuth = ['ui_agent_name', 'ui_agent_account']) {
-    // 檢查必要的認證資訊，支援遺留鍵名
     const missing = requiredAuth.filter(key => {
       return !(sessionStorage.getItem(key) || sessionStorage.getItem(key.replace(/^ui_/, '')));
     });
-
     if (missing.length > 0) {
       console.log('URL Manager - 缺少認證資訊:', missing);
       this.redirectToLogin();
       return false;
     }
-
     return true;
   }
 }
-
-// 建立全域實例
-window.URLManager = new URLManager();
-
-// 匯出供模組使用
+if (typeof window !== 'undefined') {
+  window.URLManager = new URLManager();
+}
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = URLManager;
 }

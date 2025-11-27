@@ -1,12 +1,14 @@
 <!doctype html>
 <html lang="zh-Hant">
+
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>數位叫號多媒體管理系統 - 登入</title>
-  <link rel="stylesheet" href="/login/style.css"/>
+  <link rel="stylesheet" href="/login/style.css" />
   <script src="/utils/url-manager.js"></script>
 </head>
+
 <body>
   <div class="page">
     <div class="card">
@@ -14,99 +16,77 @@
         <div class="logo" aria-label="LOGO">LOGO</div>
       </div>
       <h1 class="subtitle">數位叫號多媒體管理系統</h1>
-
       <form id="loginForm" class="form" autocomplete="off">
         <label>帳號</label>
         <input id="account" placeholder="輸入帳號" />
-
         <label>密碼</label>
         <input id="password" type="password" placeholder="••••••" />
-
         <label>驗證碼</label>
         <div class="captcha-row">
           <input id="captchaInput" placeholder="請輸入右側驗證碼" />
           <img id="captchaImage" class="captcha-img" alt="captcha" title="重新產生，請點擊圖片" />
         </div>
         <div class="hint">重新產生，請點擊圖片</div>
-
         <button type="submit" class="btn btn-dark">登入</button>
       </form>
     </div>
   </div>
-
   <script>
-    const $ = (s)=>document.querySelector(s);
+    const $ = (s) => document.querySelector(s);
     let captchaToken = null;
-    
-    // 使用 URL Manager 處理跳轉
     const urlManager = window.URLManager;
-    
-    // 讀取跳轉參數，預設為櫃員頁面
     const params = new URLSearchParams(location.search);
     const redirectTo = params.get('redirect') || '/agent/index.html';
-
-    async function loadCaptcha(){
-      try{
+    async function loadCaptcha() {
+      try {
         const res = await fetch('/api/captcha/new');
         const data = await res.json();
         captchaToken = data.token;
         const img = document.querySelector('#captchaImage');
         img.src = `/api/captcha/image/${encodeURIComponent(captchaToken)}?t=${Date.now()}`;
-      }catch(err){ console.error('captcha load', err); }
+      } catch (err) { console.error('captcha load', err); }
     }
-
-    document.querySelector('#captchaImage').addEventListener('click', ()=> loadCaptcha());
-
-    document.querySelector('#loginForm').addEventListener('submit', async (e)=>{
+    document.querySelector('#captchaImage').addEventListener('click', () => loadCaptcha());
+    document.querySelector('#loginForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const acct = $('#account').value.trim();
       const pwd = $('#password').value.trim();
       const input = $('#captchaInput').value.trim();
-      if(!acct){ alert('請輸入帳號'); return; }
-      if(!pwd){ alert('請輸入密碼'); return; }
-      if(!input){ alert('請輸入驗證碼'); return; }
-      if(!captchaToken){ alert('驗證碼尚未就緒，請重新載入頁面'); return; }
-      try{
-        const res = await fetch('/api/login',{ 
-          method:'POST', 
-          headers:{'Content-Type':'application/json'},
-          credentials: 'include', // Important: include cookies for session
+      if (!acct) { alert('請輸入帳號'); return; }
+      if (!pwd) { alert('請輸入密碼'); return; }
+      if (!input) { alert('請輸入驗證碼'); return; }
+      if (!captchaToken) { alert('驗證碼尚未就緒，請重新載入頁面'); return; }
+      try {
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
           body: JSON.stringify({ account: acct, password: pwd, captchaToken, captcha: input })
         });
         const data = await res.json();
-        if(!res.ok){ alert(data.error || '登入失敗'); await loadCaptcha(); return; }
-        // ⚠️ 重要安全說明：
-        // - 實際認證完全由後端 server-side session 處理（安全）
-        // - sessionStorage 僅用於前端 UI 顯示（方便性）
-        // - 這些資料「不會」也「不應該」用於任何安全驗證
-        // - 所有 API 請求的認證都依賴後端 session cookie
-        try{
-          if(data && data.agent){
-            // 使用 ui_ 前綴明確表示僅供 UI 顯示用途
+        if (!res.ok) { alert(data.error || '登入失敗'); await loadCaptcha(); return; }
+        try {
+          if (data && data.agent) {
             const display = data.agent.name || data.agent.account || acct;
             sessionStorage.setItem('ui_agent_name', display);
-            if(data.agent.counter) sessionStorage.setItem('ui_agent_counter', data.agent.counter);
-            if(data.agent.account) sessionStorage.setItem('ui_agent_account', data.agent.account);
-            if(data.agent.id) sessionStorage.setItem('ui_agent_id', String(data.agent.id));
-            if(data.agent.role) sessionStorage.setItem('ui_agent_role', data.agent.role);
+            if (data.agent.counter) sessionStorage.setItem('ui_agent_counter', data.agent.counter);
+            if (data.agent.account) sessionStorage.setItem('ui_agent_account', data.agent.account);
+            if (data.agent.id) sessionStorage.setItem('ui_agent_id', String(data.agent.id));
+            if (data.agent.role) sessionStorage.setItem('ui_agent_role', data.agent.role);
           } else {
-            // fallback: use submitted account as name for display
-            if(acct) sessionStorage.setItem('ui_agent_name', acct);
+            if (acct) sessionStorage.setItem('ui_agent_name', acct);
           }
-        }catch(e){ console.warn('storage error', e); }
-        
-        // 使用 URL Manager 處理安全跳轉
+        } catch (e) { console.warn('storage error', e); }
         console.log('登入成功，準備跳轉到:', redirectTo);
         await urlManager.handleLoginRedirect(redirectTo);
-        
-      }catch(err){ 
-        console.error('登入錯誤:', err); 
-        alert('登入錯誤'); 
+      } catch (err) {
+        console.error('登入錯誤:', err);
+        alert('登入錯誤');
         await loadCaptcha();
       }
     });
-
     loadCaptcha();
   </script>
 </body>
+
 </html>

@@ -12,54 +12,35 @@ const dayjs = require('dayjs');
 const QRCode = require('qrcode');
 const Database = require('better-sqlite3');
 const bcrypt = require('bcryptjs');
-// Load environment variables from .env
 require('dotenv').config();
-
 const PORT = process.env.PORT || 3000;
-
-// Production environment validation
 const isProdEnv = process.env.NODE_ENV === 'production';
-
 const SESSION_SECRET = process.env.SESSION_SECRET || 'fallback-insecure-secret-change-this';
-
-// Validate SESSION_SECRET in production
 if (isProdEnv && SESSION_SECRET === 'fallback-insecure-secret-change-this') {
   console.error('\n⚠️  CRITICAL: SESSION_SECRET is not set in production!');
   console.error('   Please set SESSION_SECRET in your .env file.');
   console.error('   Generate one using: [Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 }))\n');
   process.exit(1);
 }
-
 let ALLOWED_ORIGINS = [];
 if (process.env.ALLOWED_ORIGINS) {
-  // Normalize: trim spaces, remove trailing slash and ignore empty
   ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim().replace(/\/$/, '')).filter(Boolean);
 } else {
-  // Default: only in development, auto-allow localhost
   if (!isProdEnv) {
     ALLOWED_ORIGINS = [`http://localhost:${PORT}`];
   }
 }
-
-// In development, always ensure localhost with current PORT is allowed
 if (!isProdEnv) {
   const localhostOrigin = `http://localhost:${PORT}`;
   if (!ALLOWED_ORIGINS.includes(localhostOrigin)) {
     ALLOWED_ORIGINS.push(localhostOrigin);
   }
 }
-
-// PUBLIC_ORIGIN: optional explicit public origin (e.g. https://example.com) used when building
-// public links (QR codes). If not set the server will try to infer from incoming requests.
 const PUBLIC_ORIGIN = process.env.PUBLIC_ORIGIN || null;
-
 if (isProdEnv) {
   console.log('🔒 Running in PRODUCTION mode');
-  
-  // Validate required environment variables
   const requiredEnvVars = ['ALLOWED_ORIGINS', 'PUBLIC_ORIGIN'];
   const missing = requiredEnvVars.filter(key => !process.env[key]);
-  
   if (missing.length > 0) {
     console.error('\n⚠️  SECURITY WARNING: Production environment requires the following environment variables:');
     missing.forEach(key => console.error(`   - ${key}`));
@@ -249,6 +230,7 @@ function conditionalCsrf(req, res, next) {
   const exemptPaths = [
     '/api/tickets',
     '/api/qrcode',
+    '/api/admin/csrf', // legacy compatibility: allow admin UI to request token without csurf
   ];
   if (exemptPaths.includes(req.path)) return next();
   if (req.path.startsWith('/api/captcha')) return next();
@@ -471,6 +453,27 @@ app.get('/api/csrf', csurf(csrfCookieConfig), (req, res) => {
     // req.csrfToken() will throw if no csurf middleware is active for this request.
     const token = req.csrfToken ? req.csrfToken() : null;
     if (!token) return res.status(400).json({ error: 'csrf not available' });
+    // Debug log: show whether Set-Cookie header is present (useful for cookie-based CSRF)
+    try {
+      const setCookie = res.getHeader && res.getHeader('Set-Cookie');
+      console.debug('CSRF token issued', {
+        path: req.path,
+        method: req.method,
+        origin: req.get('origin') || req.get('host'),
+        setCookie: !!setCookie
+      });
+    } catch (e) { /* ignore */ }
+    // For client convenience, set an accessible (non-HttpOnly) cookie named 'XSRF-TOKEN'
+    // so JavaScript clients can read it if needed. Keep cookie attributes aligned with csrfCookieConfig.
+    try {
+      res.cookie('XSRF-TOKEN', token, {
+        httpOnly: false,
+        sameSite: csrfCookieConfig.cookie.sameSite || 'lax',
+        secure: csrfCookieConfig.cookie.secure || false,
+        maxAge: 15 * 60 * 1000,
+        path: '/'
+      });
+    } catch (e) { /* ignore cookie setting errors */ }
     res.json({ csrfToken: token });
   } catch (err) {
     res.status(500).json({ error: 'csrf error' });
@@ -568,7 +571,13 @@ function inferPublicOrigin(req) {
   // respect X-Forwarded-Proto when behind reverse proxies (nginx, cloudflare, tunnels)
   const forwardedProto = (req.get('x-forwarded-proto') || '').split(',')[0];
   const proto = forwardedProto || req.protocol || 'http';
-  const host = req.get('host') || `localhost:${PORT}`;
+  // Prefer x-forwarded-host if present (some proxies/tunnels preserve original host here)
+  const forwardedHost = (req.get('x-forwarded-host') || req.get('x-forwarded-hostname') || '').split(',')[0];
+  const host = forwardedHost || req.get('host') || `localhost:${PORT}`;
+  // Debug: log incoming headers that affect origin detection when not running locally
+  if ((!process.env.NODE_ENV || process.env.NODE_ENV !== 'development') && forwardedHost && forwardedHost !== req.get('host')) {
+    console.debug('inferPublicOrigin: using forwarded host', { forwardedHost, hostHeader: req.get('host'), forwardedProto });
+  }
   return `${proto}://${host}`;
 }
 
@@ -975,7 +984,16 @@ server.listen(PORT, () => {
 app.use((err, req, res, next) => {
   if (err && err.code === 'EBADCSRFTOKEN') {
     // log and return 403
-    console.warn('⚠️  Invalid CSRF token detected', err.message || '');
+    // Helpful debug: include request path/method/origin, and whether session/cookie present
+    const origin = req.get('origin') || req.get('host');
+    const cookieHeader = req.get('cookie') || '';
+    console.warn('⚠️  Invalid CSRF token detected', err.message || '', JSON.stringify({
+      path: req.path,
+      method: req.method,
+      origin,
+      cookiePresent: !!cookieHeader,
+      cookieSample: cookieHeader ? cookieHeader.split(';').slice(0,3).join(';') : ''
+    }));
     return res.status(403).json({ error: 'invalid csrf token' });
   }
   next(err);

@@ -201,7 +201,7 @@ npm start
 
 管理 UI（`/admin/agents.html`）與管理 API 需要管理員權限，系統會檢查登入狀態和角色：
 
-1) 先呼叫 POST `/api/admin/csrf` 取得 `{ csrfToken }`
+1) 先呼叫 GET `/api/csrf` 取得 `{ csrfToken }`
 2) 後續在瀏覽器來源（Origin 在 ALLOWED_ORIGINS 內）呼叫 `/api/agents` 的 POST/PUT/DELETE 時，加上 Header `x-csrf-token: <csrfToken>`
 
 ### 櫃台號管理重要說明
@@ -374,7 +374,7 @@ npm start
 **6. 管理 API 回傳 `missing csrf token`**
 ```powershell
 # 步驟 1：取得 CSRF token
-$csrf = Invoke-RestMethod -Method Post -Uri "http://localhost:7894/api/admin/csrf"
+$csrf = Invoke-RestMethod -Method Get -Uri "http://localhost:7894/api/csrf"
 
 # 步驟 2：使用 token 呼叫管理 API
 $headers = @{ 'x-csrf-token' = $csrf.csrfToken }
