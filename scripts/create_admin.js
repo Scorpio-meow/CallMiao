@@ -8,6 +8,15 @@ const DEFAULT_NAME = 'Administrator';
 function genPassword() {
   return crypto.randomBytes(8).toString('hex').slice(0, 12);
 }
+function maskSecret(secret, left = 2, right = 2) {
+  if (!secret) return '***';
+  const s = String(secret);
+  if (s.length <= left + right + 2) return '***';
+  const leftPart = s.slice(0, left);
+  const rightPart = s.slice(-right);
+  const masked = '*'.repeat(Math.max(3, s.length - left - right));
+  return `${leftPart}${masked}${rightPart}`;
+}
 function parseArgs() {
   const args = {};
   process.argv.slice(2).forEach(a => {
@@ -49,7 +58,8 @@ function main() {
     console.log(`  id: ${info.lastInsertRowid}`);
     const printPassword = !!args['print-password'] || !!args['print_password'];
     if (printPassword) {
-      console.log(`  password (temporary, please change ASAP): ${password}`);
+      // Print a masked version instead of the cleartext password to avoid leaking secrets in logs
+      console.log(`  password (temporary, masked, please change ASAP): ${maskSecret(password)}`);
     } else {
       console.log('  Temporary password has been generated but NOT displayed for security reasons.');
       console.log('  To show it once on the console, re-run this command with --print-password (use with caution).');

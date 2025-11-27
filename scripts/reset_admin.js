@@ -8,6 +8,15 @@ const DEFAULT_ACCOUNT = 'admin';
 function genPassword() {
   return crypto.randomBytes(16).toString('base64').replace(/[+/=]/g, '').slice(0, 12);
 }
+function maskSecret(secret, left = 2, right = 2) {
+  if (!secret) return '***';
+  const s = String(secret);
+  if (s.length <= left + right + 2) return '***';
+  const leftPart = s.slice(0, left);
+  const rightPart = s.slice(-right);
+  const masked = '*'.repeat(Math.max(3, s.length - left - right));
+  return `${leftPart}${masked}${rightPart}`;
+}
 function parseArgs() {
   const args = {};
   process.argv.slice(2).forEach(a => {
@@ -76,7 +85,7 @@ function main() {
           console.log(`Password updated for account: ${account} (id=${existing.id})`);
           const printPassword = !!args['print-password'] || !!args['print_password'];
           if (printPassword) {
-            console.log('Temporary password (copy now and change after login):', password);
+            console.log('Temporary password (masked, copy now and change after login):', maskSecret(password));
           } else {
             console.log('Temporary password has been generated but NOT shown here for security reasons.');
             console.log('To show it once on the console, re-run this command with --print-password (use with caution).');
@@ -96,7 +105,7 @@ function main() {
         console.log(`  id: ${info.lastInsertRowid}`);
         const printPassword = !!args['print-password'] || !!args['print_password'];
         if (printPassword) {
-          console.log('Temporary password (copy now and change after login):', password);
+          console.log('Temporary password (masked, copy now and change after login):', maskSecret(password));
         } else {
           console.log('Temporary password has been generated but NOT shown here for security reasons.');
           console.log('To show it once on the console, re-run this command with --print-password (use with caution).');
