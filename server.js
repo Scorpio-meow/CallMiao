@@ -30,10 +30,6 @@ if (isProdEnv && SESSION_SECRET === 'fallback-insecure-secret-change-this') {
   process.exit(1);
 }
 
-
-// ALLOWED_ORIGINS: comma-separated list of allowed origins for CORS
-// In development: automatically allows localhost on current PORT
-// In production: MUST be explicitly set in environment variables
 let ALLOWED_ORIGINS = [];
 if (process.env.ALLOWED_ORIGINS) {
   // Normalize: trim spaces, remove trailing slash and ignore empty
@@ -240,8 +236,31 @@ app.use(session({
 // csurf must be registered after the session middleware so it can access the session store.
 // Accept token via request body, query, or headers (x-csrf-token / x-xsrf-token).
 const csrfCookieConfig = { cookie: { httpOnly: true, sameSite: 'lax', secure: isProdEnv } };
-app.use('/api/agent', csurf(csrfCookieConfig));
-app.use('/api/agents', csurf(csrfCookieConfig));
+const csrfProtection = csurf(csrfCookieConfig);
+
+// Conditional middleware: apply CSRF to all non-safe methods except for
+// explicitly exempted public endpoints.
+function conditionalCsrf(req, res, next) {
+  // Always skip for safe methods
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+
+  // Exempt public APIs that must remain unauthenticated (kiosk, qrcode, captcha)
+  const exemptPaths = [
+    '/api/tickets',
+    '/api/qrcode',
+  ];
+  if (exemptPaths.includes(req.path)) return next();
+  if (req.path.startsWith('/api/captcha')) return next();
+
+  // Exempt login (creating a session) to avoid login CSRF issues.
+  // Logout is state changing and should be protected.
+  if (req.path === '/api/login') return next();
+
+  // Otherwise apply csrf protection
+  return csrfProtection(req, res, next);
+}
+
+app.use(conditionalCsrf);
 
 // Security headers using helmet
 app.use(helmet({
@@ -662,15 +681,9 @@ function requireAgentAuth(req, res, next) {
 }
 
 function requireCsrf(req, res, next) {
-  // Only enforce CSRF for browser-originated requests (with Origin header matching ALLOWED_ORIGINS)
-  const origin = req.get('origin');
-  if (origin && ALLOWED_ORIGINS.indexOf(origin) !== -1) {
-    const token = req.headers['x-csrf-token'];
-    if (!token) return res.status(403).json({ error: 'missing csrf token' });
-    const rec = csrfStore[token];
-    if (!rec) return res.status(403).json({ error: 'invalid or expired csrf token' });
-    // token is valid
-  }
+  // Only check session and admin role; CSRF token validation is now handled by csurf
+  // as a separate middleware registered globally. The original in-memory csrfStore
+  // is kept for compatibility but not required here.
   
   // Additionally check if user is logged in and is admin (for admin-only endpoints)
   if (!req.session || !req.session.agent) {
