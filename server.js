@@ -6,6 +6,8 @@ const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const session = require('express-session');
 const helmet = require('helmet');
+const csurf = require('csurf');
+const cookieParser = require('cookie-parser');
 const dayjs = require('dayjs');
 const QRCode = require('qrcode');
 const Database = require('better-sqlite3');
@@ -34,7 +36,8 @@ if (isProdEnv && SESSION_SECRET === 'fallback-insecure-secret-change-this') {
 // In production: MUST be explicitly set in environment variables
 let ALLOWED_ORIGINS = [];
 if (process.env.ALLOWED_ORIGINS) {
-  ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()).filter(Boolean);
+  // Normalize: trim spaces, remove trailing slash and ignore empty
+  ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim().replace(/\/$/, '')).filter(Boolean);
 } else {
   // Default: only in development, auto-allow localhost
   if (!isProdEnv) {
@@ -196,7 +199,8 @@ app.use(cors({
     }
     
     // Check if origin is in allowlist
-    if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+    const normalizedOrigin = origin.replace(/\/$/, '');
+    if (ALLOWED_ORIGINS.includes(normalizedOrigin)) return cb(null, true);
     
     // Log denied origins for security monitoring
     console.warn(`⚠️  CORS blocked: ${origin} (not in allowlist)`);
@@ -206,6 +210,8 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+// cookie parser required by csurf when using cookie-based tokens
+app.use(cookieParser());
 
 // Session configuration - MUST be before routes
 const SQLiteStore = require('connect-sqlite3')(session);
@@ -225,6 +231,17 @@ app.use(session({
   },
   name: 'queueSessionId' // Custom session cookie name
 }));
+
+// --- CSRF protection ---
+// Use csurf for session-based endpoints. We purposely only apply CSRF to
+// authenticated agent/admin endpoints (under /api/agent and /api/agents) and
+// to other session-protected admin routes. Public endpoints like /api/tickets
+// remain accessible for kiosks/devices that don't use CSRF tokens.
+// csurf must be registered after the session middleware so it can access the session store.
+// Accept token via request body, query, or headers (x-csrf-token / x-xsrf-token).
+const csrfCookieConfig = { cookie: { httpOnly: true, sameSite: 'lax', secure: isProdEnv } };
+app.use('/api/agent', csurf(csrfCookieConfig));
+app.use('/api/agents', csurf(csrfCookieConfig));
 
 // Security headers using helmet
 app.use(helmet({
@@ -403,6 +420,21 @@ app.post('/api/admin/csrf', adminAgentLimiter, (req, res) => {
     csrfStore[token] = { createdAt: Date.now() };
     res.json({ csrfToken: token, expiresIn: 15 * 60 });
   } catch (err) { res.status(500).json({ error: 'csrf error' }); }
+});
+
+// Return a CSRF token for JavaScript clients that use session-based APIs
+// The token returned here is validated by the csurf middleware. It should be
+// called by frontends and then used in subsequent state-changing requests via
+// 'X-CSRF-Token' header or by including in the request body as '_csrf'.
+app.get('/api/csrf', csurf(csrfCookieConfig), (req, res) => {
+  try {
+    // req.csrfToken() will throw if no csurf middleware is active for this request.
+    const token = req.csrfToken ? req.csrfToken() : null;
+    if (!token) return res.status(400).json({ error: 'csrf not available' });
+    res.json({ csrfToken: token });
+  } catch (err) {
+    res.status(500).json({ error: 'csrf error' });
+  }
 });
 
 // --- agents management API (simple CRUD) ---
@@ -899,4 +931,14 @@ io.on('connection', (socket) => {
 
 server.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
+});
+
+// CSRF error handler - this should be registered after other middleware/routes
+app.use((err, req, res, next) => {
+  if (err && err.code === 'EBADCSRFTOKEN') {
+    // log and return 403
+    console.warn('⚠️  Invalid CSRF token detected', err.message || '');
+    return res.status(403).json({ error: 'invalid csrf token' });
+  }
+  next(err);
 });
