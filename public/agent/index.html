@@ -292,7 +292,13 @@
             const el = document.querySelector('#selectedInfo');
             if (!el) return;
             if (!ticket) { el.textContent = ''; return; }
-            el.innerHTML = `選取：<strong>${ticket.number}</strong>，櫃台 ${ticket.counter || '-'}`;
+            // Use textContent and DOM methods to avoid XSS via ticket fields
+            // Format: 選取：<strong>TICKET</strong>，櫃台 COUNTER
+            el.textContent = '選取：';
+            const strong = document.createElement('strong');
+            strong.textContent = String(ticket.number || '');
+            el.appendChild(strong);
+            el.appendChild(document.createTextNode(`，櫃台 ${String(ticket.counter || '-')}`));
         }
 
         function updateClock() {
@@ -321,13 +327,20 @@
             const order = ['A', 'B', 'C', 'D', 'E'];
             const map = (summary || []).reduce((acc, s) => { acc[s.serviceType] = s.waiting || 0; return acc; }, {});
             // Render only the category rows (no service buttons or quick counters)
-            const categoriesHtml = `${order.map(code => {
-                const count = map[code] || 0;
-                return `<div class="category-row" data-service="${code}"><div class="count">${count}</div><div class="label">${SERVICE_NAMES[code] || code}</div></div>`;
-            }).join('')}`;
             const wrap = document.querySelector('#categoryList');
             if (wrap) {
-                wrap.innerHTML = categoriesHtml;
+                wrap.innerHTML = '';
+                order.forEach(code => {
+                    const count = map[code] || 0;
+                    const row = document.createElement('div');
+                    row.className = 'category-row';
+                    row.setAttribute('data-service', code);
+                    const countEl = document.createElement('div'); countEl.className = 'count'; countEl.textContent = String(count);
+                    const labelEl = document.createElement('div'); labelEl.className = 'label'; labelEl.textContent = (SERVICE_NAMES[code] || code);
+                    row.appendChild(countEl);
+                    row.appendChild(labelEl);
+                    wrap.appendChild(row);
+                });
                 // click to select serviceType, update visual active state, and refresh
                 const rows = wrap.querySelectorAll('.category-row');
                 rows.forEach(el => {
@@ -395,24 +408,47 @@
             const waitingData = await waitingRes.json();
             const waitingTbody = document.querySelector('#waiting');
             if (waitingTbody) {
-                waitingTbody.innerHTML = waitingData.tickets.map(t =>
-                    `<tr class="clickable" data-waiting-id="${t.id}" data-id="${t.id}" data-number="${t.number}">
-                        <td>${t.number}</td>
-                        <td>${new Date(t.createdAt).toLocaleTimeString()}</td>
-                    </tr>`
-                ).join('') || '<tr><td colspan="2">無</td></tr>';
+                waitingTbody.innerHTML = '';
+                if (!waitingData.tickets || waitingData.tickets.length === 0) {
+                    const tr = document.createElement('tr');
+                    const td = document.createElement('td'); td.setAttribute('colspan', '2'); td.textContent = '無'; tr.appendChild(td);
+                    waitingTbody.appendChild(tr);
+                } else {
+                    waitingData.tickets.forEach(t => {
+                        const tr = document.createElement('tr'); tr.className = 'clickable';
+                        tr.setAttribute('data-waiting-id', String(t.id));
+                        tr.setAttribute('data-id', String(t.id));
+                        tr.setAttribute('data-number', String(t.number));
+                        const tdNumber = document.createElement('td'); tdNumber.textContent = String(t.number || '');
+                        const tdCreated = document.createElement('td'); tdCreated.textContent = new Date(t.createdAt).toLocaleTimeString();
+                        tr.appendChild(tdNumber); tr.appendChild(tdCreated);
+                        waitingTbody.appendChild(tr);
+                    });
+                }
             }
 
             const currentTbody = document.querySelector('#current');
             if (currentTbody) {
-                currentTbody.innerHTML = (data.currentCalls || []).map(c =>
-                    `<tr class="clickable" data-id="${c.id}" data-number="${c.number}">
-                        <td><span class="badge">${c.serviceType}</span> ${c.number}</td>
-                        <td>${c.counter || '-'}</td>
-                        <td>${new Date(c.calledAt).toLocaleTimeString()}</td>
-                        <td><button class="btn btn-light" data-pick="${c.id}">選取</button></td>
-                    </tr>`
-                ).join('') || '<tr><td colspan="4">無</td></tr>';
+                currentTbody.innerHTML = '';
+                const calls = data.currentCalls || [];
+                if (!calls.length) {
+                    const tr = document.createElement('tr');
+                    const td = document.createElement('td'); td.setAttribute('colspan', '4'); td.textContent = '無'; tr.appendChild(td);
+                    currentTbody.appendChild(tr);
+                } else {
+                    calls.forEach(c => {
+                        const tr = document.createElement('tr'); tr.className = 'clickable';
+                        tr.setAttribute('data-id', String(c.id)); tr.setAttribute('data-number', String(c.number || ''));
+                        const tdNum = document.createElement('td');
+                        const span = document.createElement('span'); span.className = 'badge'; span.textContent = c.serviceType || '';
+                        tdNum.appendChild(span); tdNum.appendChild(document.createTextNode(' ' + String(c.number || '')));
+                        const tdCounter = document.createElement('td'); tdCounter.textContent = c.counter || '-';
+                        const tdCalled = document.createElement('td'); tdCalled.textContent = c.calledAt ? new Date(c.calledAt).toLocaleTimeString() : '-';
+                        const tdBtn = document.createElement('td'); const btn = document.createElement('button'); btn.className = 'btn btn-light'; btn.setAttribute('data-pick', String(c.id)); btn.textContent = '選取'; tdBtn.appendChild(btn);
+                        tr.appendChild(tdNum); tr.appendChild(tdCounter); tr.appendChild(tdCalled); tr.appendChild(tdBtn);
+                        currentTbody.appendChild(tr);
+                    });
+                }
             }
 
             document.querySelectorAll('[data-id]').forEach(tr => {

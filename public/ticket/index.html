@@ -126,13 +126,14 @@
       const prev = lastStatus;
       const cur = ticket.status;
 
-      const infoHtml = `
-        <p>號碼：<strong>${ticket.number}</strong></p>
-        <p>狀態：${statusLabel(ticket.status)}</p>
-        <p>櫃台：${ticket.counter || '-'}</p>
-        <p>建立：${new Date(ticket.createdAt).toLocaleString()}</p>
-      `;
-      document.querySelector('#info').innerHTML = infoHtml;
+      const infoWrap = document.querySelector('#info');
+      if (infoWrap) {
+        infoWrap.textContent = ''; // clear
+        const pNum = document.createElement('p'); pNum.textContent = '號碼：'; const strong = document.createElement('strong'); strong.textContent = String(ticket.number || ''); pNum.appendChild(strong); infoWrap.appendChild(pNum);
+        const pStatus = document.createElement('p'); pStatus.textContent = '狀態：' + statusLabel(ticket.status); infoWrap.appendChild(pStatus);
+        const pCounter = document.createElement('p'); pCounter.textContent = '櫃台：' + String(ticket.counter || '-'); infoWrap.appendChild(pCounter);
+        const pCreated = document.createElement('p'); pCreated.textContent = '建立：' + new Date(ticket.createdAt).toLocaleString(); infoWrap.appendChild(pCreated);
+      }
 
       try{
         // 並行取得總覽與等候名單以顯示進度
@@ -165,11 +166,12 @@
           aheadText = '';
         }
 
-        const lines = [
-          `<p>目前叫號：${nowCallingText}</p>`,
-          aheadText ? `<p>${aheadText}</p>` : ''
-        ].filter(Boolean).join('');
-        document.querySelector('#progress').innerHTML = lines;
+        const progressEl = document.querySelector('#progress');
+        if (progressEl) {
+          progressEl.textContent = '';
+          const pNow = document.createElement('p'); pNow.textContent = '目前叫號：' + nowCallingText; progressEl.appendChild(pNow);
+          if (aheadText) { const pAhead = document.createElement('p'); pAhead.textContent = aheadText; progressEl.appendChild(pAhead); }
+        }
       }catch(e){
         // 靜默失敗，不影響基本資訊顯示
         document.querySelector('#progress').textContent = '';

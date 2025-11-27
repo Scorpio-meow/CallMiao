@@ -83,11 +83,11 @@ npm start
 ### 📱 訪問介面
 
 本地訪問（開發模式）：
-- Kiosk（取號）：http://localhost:7894/kiosk/index.html
-- Agent（櫃員）：http://localhost:7894/agent/index.html
-- Lobby（大廳）：http://localhost:7894/lobby/index.html
-- 登入頁：http://localhost:7894/login/index.html
-- 管理頁：http://localhost:7894/admin/agents.html
+- Kiosk（取號）：http://localhost:7894/kiosk/index.html https://your-tunnel-id.devtunnels.ms/kiosk/index.html
+- Agent（櫃員）：http://localhost:7894/agent/index.html https://your-tunnel-id.devtunnels.ms/agent/index.html
+- Lobby（大廳）：http://localhost:7894/lobby/index.html https://your-tunnel-id.devtunnels.ms/lobby/index.html
+- 登入頁：http://localhost:7894/login/index.html https://your-tunnel-id.devtunnels.ms/login/index.html
+- 管理頁：http://localhost:7894/admin/agents.html https://your-tunnel-id.devtunnels.ms/admin/agents.html
 
 遠端訪問（使用 DevTunnel 等服務時）：
 - 將 `localhost:7894` 替換為您的公開網址

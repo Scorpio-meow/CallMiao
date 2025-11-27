@@ -224,6 +224,11 @@ npm run security-check
 - ⚠️ 權衡與建議：
    - `csurf` 的版本受到注意（目前在套件庫顯示已 archived），這是短期採用的實作；建議定期評估是否需要替換為其他仍在維護或官方推薦的 CSRF 中間件。
    - 長期建議將 `agents` 的 list GET API 加固為管理員可見（視實際使用情況決定），並考慮在 CI 中加入 rate-limiter 的覆蓋測試。
+   - 修正多處前端 DOM/XSS 風險：
+      - 在管理頁 (`public/admin/agents.html`) 使用 DOM API 建構表格以取代直接使用 `innerHTML` 串接，避免 agent 字段造成 XSS。
+      - 在櫃員端 (`public/agent/index.html`) 使用 `textContent` / DOM 元素建立取代 `innerHTML`，以避免直接插入票號或櫃台字串造成 DOM XSS。
+      - 在票券頁面 (`public/ticket/index.html`) 將 `innerHTML` 改為以 DOM API 建構，避免在 UI 中直接渲染來自後端的票號或欄位導致 XSS。
+      - 在 `public/utils/url-manager.js` 中新增跳轉白名單、協定檢核與 protocol-relative URL 拒絕，避免將使用者輸入直接作為跳轉目標造成未驗證的轉向或 XSS。（已驗證 fallback 行為）
 
 ---
 

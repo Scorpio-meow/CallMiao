@@ -204,8 +204,9 @@ app.use(cors({
   },
   credentials: true
 }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Limit request body size to avoid large or unexpected payloads and reduce parser stress
+app.use(express.json({ limit: '100kb' }));
+app.use(express.urlencoded({ extended: true, limit: '100kb' }));
 // cookie parser required by csurf when using cookie-based tokens
 app.use(cookieParser());
 

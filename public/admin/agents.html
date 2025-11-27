@@ -160,14 +160,32 @@
         if (data.error) return wrap.innerHTML = `<div class="muted">錯誤: ${data.error}</div>`;
         const rows = data.agents || [];
         if (rows.length === 0) return wrap.innerHTML = '<div class="muted">無帳號</div>';
-        const html = ['<table><thead><tr><th>id</th><th>account</th><th>name</th><th>counter</th><th>role</th><th>active</th><th></th></tr></thead><tbody>'];
+        // Construct table safely using DOM APIs to avoid XSS risks
+        const table = document.createElement('table');
+        const thead = document.createElement('thead');
+        thead.innerHTML = '<tr><th>id</th><th>account</th><th>name</th><th>counter</th><th>role</th><th>active</th><th></th></tr>';
+        table.appendChild(thead);
+        const tbody = document.createElement('tbody');
         for (const a of rows) {
-          html.push(`<tr><td>${a.id}</td><td>${a.account}</td><td>${a.name || ''}</td><td>${a.counter || ''}</td><td>${a.role || ''}</td><td>${a.active ? 'Y' : 'N'}</td><td><button data-id="${a.id}" class="edit small">編輯</button> <button data-id="${a.id}" class="del small danger">刪除</button></td></tr>`);
+          const tr = document.createElement('tr');
+          const tdId = document.createElement('td'); tdId.textContent = String(a.id || ''); tr.appendChild(tdId);
+          const tdAccount = document.createElement('td'); tdAccount.textContent = a.account || ''; tr.appendChild(tdAccount);
+          const tdName = document.createElement('td'); tdName.textContent = a.name || ''; tr.appendChild(tdName);
+          const tdCounter = document.createElement('td'); tdCounter.textContent = a.counter || ''; tr.appendChild(tdCounter);
+          const tdRole = document.createElement('td'); tdRole.textContent = a.role || ''; tr.appendChild(tdRole);
+          const tdActive = document.createElement('td'); tdActive.textContent = a.active ? 'Y' : 'N'; tr.appendChild(tdActive);
+          const tdActions = document.createElement('td');
+          const editBtn = document.createElement('button'); editBtn.className = 'edit small'; editBtn.setAttribute('data-id', String(a.id)); editBtn.textContent = '編輯';
+          const delBtn = document.createElement('button'); delBtn.className = 'del small danger'; delBtn.setAttribute('data-id', String(a.id)); delBtn.textContent = '刪除';
+          tdActions.appendChild(editBtn); tdActions.appendChild(document.createTextNode(' ')); tdActions.appendChild(delBtn);
+          tr.appendChild(tdActions);
+          tbody.appendChild(tr);
         }
-        html.push('</tbody></table>');
-        wrap.innerHTML = html.join('');
-        document.querySelectorAll('button.edit').forEach(b => b.onclick = onEdit);
-        document.querySelectorAll('button.del').forEach(b => b.onclick = onDelete);
+        table.appendChild(tbody);
+        wrap.innerHTML = ''; wrap.appendChild(table);
+        // Attach event handlers
+        wrap.querySelectorAll('button.edit').forEach(b => b.onclick = onEdit);
+        wrap.querySelectorAll('button.del').forEach(b => b.onclick = onDelete);
       } catch (err) { wrap.innerHTML = `<div class="muted">載入失敗</div>`; console.error(err); }
     }
 
