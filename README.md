@@ -34,14 +34,14 @@ notepad .env
 
 **環境變數範例**（本地開發）：
 ```env
-PORT=7894
+PORT=3000
 NODE_ENV=development
 # 開發模式會自動允許 localhost，無需設定 ALLOWED_ORIGINS
 ```
 
 **環境變數範例**（生產環境 + DevTunnel）：
 ```env
-PORT=7894
+PORT=3000
 NODE_ENV=production
 ALLOWED_ORIGINS=https://your-tunnel-id.devtunnels.ms
 PUBLIC_ORIGIN=https://your-tunnel-id.devtunnels.ms
@@ -52,21 +52,30 @@ PUBLIC_ORIGIN=https://your-tunnel-id.devtunnels.ms
 - 開發模式會自動允許所有 localhost 和 127.0.0.1
 - 生產模式只需列出遠端/公開的 HTTPS URL
 
-3. **執行安全檢查**
+3. **執行安全檢查（如需手動執行）**
 
-```powershell
-npm run security-check
-```
+請參考本文件中「手動安全檢查」清單（檢查環境變數、.gitignore、資料庫備份與權限等）或使用發行版提供的自動化安全檢查工具。
+
+> ⚠️ 注意：請手動執行安全檢查（或使用發行版提供的自動化工具），如需在啟動前自動執行請在 `package.json` 新增 `prestart` 指令來觸發您所選擇的檢查工具。
 
 4. **建立管理員帳號**
 
-```powershell
-# 建立新的管理員帳號
-npm run create-admin
+若沒有可用的管理工具，請改用下列方法建立或重設管理員帳號：
 
-# 重設管理員密碼（如需要）
-npm run reset-admin -- --generate
-```
+- 透過管理介面（若可用）：在 `http://<host>/admin/agents.html` 使用管理介面建立帳號。
+- 使用 SQLite 與 bcrypt：
+  1) 產生 bcrypt hash（在有 Node.js 的環境下）：
+  ```powershell
+  node -e "console.log(require('bcryptjs').hashSync('YourPassword', 10))"
+  ```
+  2) 在 SQLite 中建立帳號（請先備份資料庫）：
+  ```powershell
+  sqlite3 db/queue.db
+  INSERT INTO agents (account, name, password, counter, role, active, createdAt) VALUES ('admin', 'Administrator', '<bcrypt-hash>', '', 'admin', 1, datetime('now'));
+  ```
+  3) 若不熟悉 SQL 操作，可請系統管理員或維運人員協助。
+
+備註：`<bcrypt-hash>` 請由第一步產生並替換。
 
 ### 🚀 啟動系統
 
@@ -83,14 +92,14 @@ npm start
 ### 📱 訪問介面
 
 本地訪問（開發模式）：
-- Kiosk（取號）：http://localhost:7894/kiosk/index.html https://your-tunnel-id.devtunnels.ms/kiosk/index.html
-- Agent（櫃員）：http://localhost:7894/agent/index.html https://your-tunnel-id.devtunnels.ms/agent/index.html
-- Lobby（大廳）：http://localhost:7894/lobby/index.html https://your-tunnel-id.devtunnels.ms/lobby/index.html
-- 登入頁：http://localhost:7894/login/index.html https://your-tunnel-id.devtunnels.ms/login/index.html
-- 管理頁：http://localhost:7894/admin/agents.html https://your-tunnel-id.devtunnels.ms/admin/agents.html
+ - Kiosk（取號）：http://localhost:3000/kiosk/index.html https://your-tunnel-id.devtunnels.ms/kiosk/index.html
+ - Agent（櫃員）：http://localhost:3000/agent/index.html https://your-tunnel-id.devtunnels.ms/agent/index.html
+ - Lobby（大廳）：http://localhost:3000/lobby/index.html https://your-tunnel-id.devtunnels.ms/lobby/index.html
+ - 登入頁：http://localhost:3000/login/index.html https://your-tunnel-id.devtunnels.ms/login/index.html
+ - 管理頁：http://localhost:3000/admin/agents.html https://your-tunnel-id.devtunnels.ms/admin/agents.html
 
 遠端訪問（使用 DevTunnel 等服務時）：
-- 將 `localhost:7894` 替換為您的公開網址
+ - 將 `localhost:3000` 替換為您的公開網址
 
 ## 需求與相容性
 
@@ -104,28 +113,22 @@ npm start
 ### 必要設定
 
 - **PORT**（預設：3000）：HTTP 服務埠號
+**重要**：首次啟動前請先完成安全配置！
+
+### 🔒 安全配置（首次設定必須執行）
   ```env
-  PORT=7894
+  PORT=3000
   ```
-
-- **NODE_ENV**（預設：development）：執行環境
-  - `development`：開發模式，自動允許所有 localhost，詳細錯誤訊息
-  - `production`：生產模式，嚴格安全檢查，簡化錯誤訊息
+**建立管理員帳號（如需手動建立）**：請參考上面「建立管理員帳號」段落所示的步驟（使用管理 UI 或透過 SQLite/DB 方式）。
   ```env
-  NODE_ENV=production
-  ```
+**重設管理員密碼（自動生成）**：如需手動進行，請使用 Node.js 產生 bcrypt hash 並在資料庫（SQLite）中更新，或聯絡系統管理員。
 
-### CORS 與網址設定（生產環境必填）
-
-- **ALLOWED_ORIGINS**：允許的前端網域清單（逗號分隔，**無需包含 localhost**）
-  
-  **重要**：
-  - ✅ localhost 會自動被允許（在當前 PORT 上）
+**重設管理員密碼（指定密碼）**：如需手動進行，請參考上文 `重設管理員密碼` 指示使用 bcrypt hash 更新資料庫。 
   - ✅ 只需列出遠端/公開的 URL
-  - ✅ 不要包含末尾斜線 `/`
-  
-  範例：
-  ```env
+**建立其他管理帳號（如需手動建立）**：
+```powershell
+# 若有發行版提供的管理工具，請依發行版指引執行或使用資料庫操作建立帳號
+```
   # 單一網域
   ALLOWED_ORIGINS=https://queue.yourcompany.com
   
@@ -163,7 +166,7 @@ npm start
 ```
 叫號機模組/
 ├── server.js                 # 主伺服器（Express + Socket.IO）與所有 API 路由
-├── package.json              # 專案相依與腳本
+├── package.json              # 專案相依與預設啟動指令
 ├── .env                      # 環境變數配置（不提交到 Git）
 ├── .env.example              # 環境變數範本
 ├── .gitignore                # Git 忽略檔案清單
@@ -183,17 +186,11 @@ npm start
 │       ├── input-validator.js # 輸入驗證工具
 │       └── url-manager.js    # URL 管理與跳轉
 │
-├── scripts/                  # 工具腳本
-│   ├── create_admin.js       # 建立管理員帳號
-│   ├── reset_admin.js        # 重設管理員密碼
-│   ├── security-check.js     # 安全性檢查
-│   └── pre-commit.sample     # Git pre-commit hook 範本
 │
 └── 安全文件/
     ├── SECURITY-UPDATE.md                           # 安全性更新說明
-    ├── SECURITY-DEPLOYMENT.md                       # 部署安全檢查清單
     ├── Security-Guidelines_Traditional-Chinese.md   # 安全開發守則
-    └── GIT-SECURITY-CLEANUP.md                      # Git 歷史清理指南
+    └── (其它安全文件可能在上游/發行版提供：如 SECURITY-DEPLOYMENT.md、GIT-SECURITY-CLEANUP.md 等)  
 ```
 
 
@@ -291,45 +288,48 @@ ALTER TABLE tickets_new RENAME TO tickets;
 **取號**（公共 API）：
 ```powershell
 $body = @{ serviceType = 'A' } | ConvertTo-Json
-Invoke-RestMethod -Method Post -Uri "http://localhost:7894/api/tickets" -ContentType 'application/json' -Body $body
+Invoke-RestMethod -Method Post -Uri "http://localhost:3000/api/tickets" -ContentType 'application/json' -Body $body
 ```
 
 **查看等候清單**：
 ```powershell
-Invoke-RestMethod -Method Get -Uri "http://localhost:7894/api/tickets/waiting?serviceType=A"
+Invoke-RestMethod -Method Get -Uri "http://localhost:3000/api/tickets/waiting?serviceType=A"
 ```
 
 **取得系統概況**：
 ```powershell
-Invoke-RestMethod -Method Get -Uri "http://localhost:7894/api/overview"
+Invoke-RestMethod -Method Get -Uri "http://localhost:3000/api/overview"
 ```
 
 ### 管理員操作
 
-**建立管理員帳號**：
+> ⚠️ 注意：以下 `npm run` 指令（在某些發行版本中）可能會對應到發行版或管理工具中提供的管理指令；如無，請使用資料庫管理工具或聯絡維運人員進行管理帳號作業。
+
+**建立管理員帳號（若無自動化管理工具請改用 DB 或介面）**：
+請參考下列 `建立管理員帳號` 區塊，使用管理介面或 SQLite 命令手動建立帳號。
+
+**重設管理員密碼（若無自動化管理工具）：**
+若沒有可用的管理工具，請改用資料庫管理或使用 Node.js 產生 bcrypt hash 並在資料庫更新：
+
+1) 產生 bcrypt hash：
 ```powershell
-npm run create-admin
+node -e "console.log(require('bcryptjs').hashSync('YourNewPassword', 10))"
+```
+2) 更新 SQLite 中的密碼：
+```powershell
+sqlite3 db/queue.db
+UPDATE agents SET password = '<bcrypt-hash>' WHERE account = 'admin';
 ```
 
-**重設管理員密碼**（自動生成）：
-```powershell
-npm run reset-admin -- --generate
-```
+**建立其他管理帳號（亦可用資料庫建立）**：
+請依照上述建立管理員步驟，替換 `account` 與 `name` 欄位。或使用發行版提供的管理工具（若可用）。
 
-**重設管理員密碼**（指定密碼）：
-```powershell
-npm run reset-admin -- --password=YourNewPassword
-```
-
-**建立其他管理帳號**：
-```powershell
-npm run reset-admin -- --account=admin2 --create --generate --name="副管理員"
-```
-
-**執行安全檢查**：
-```powershell
-npm run security-check
-```
+**執行安全檢查（如無自動化工具請參考下列步驟）：**
+若沒有 `security-check` 工具，請手動檢查以下項目（部分檢查可能需系統管理員或維運協助）：
+- 檢查 `.env` 中必要變數（`SESSION_SECRET`, `ALLOWED_ORIGINS`, `PUBLIC_ORIGIN` 等）
+- 檢查 `.gitignore` 中已排除 `.env` 與 `db/`
+- 檢查 `db/queue.db` 權限與備份機制
+- 確認 `NODE_ENV=production` 時的嚴格設定與日誌機制
 
 
 ## 疑難排解（Troubleshooting）
@@ -342,7 +342,7 @@ npm run security-check
 $env:PORT='3001'; npm run dev
 
 # 方法 B：找出並關閉佔用埠的程式
-netstat -ano | findstr :7894
+netstat -ano | findstr :3000
 ```
 
 **2. SQLite 資料庫鎖定（database is locked / SQLITE_BUSY）**
@@ -374,15 +374,15 @@ npm start
 **6. 管理 API 回傳 `missing csrf token`**
 ```powershell
 # 步驟 1：取得 CSRF token
-$csrf = Invoke-RestMethod -Method Get -Uri "http://localhost:7894/api/csrf"
+$csrf = Invoke-RestMethod -Method Get -Uri "http://localhost:3000/api/csrf"
 
 # 步驟 2：使用 token 呼叫管理 API
 $headers = @{ 'x-csrf-token' = $csrf.csrfToken }
-Invoke-RestMethod -Method Get -Uri "http://localhost:7894/api/agents" -Headers $headers
+Invoke-RestMethod -Method Get -Uri "http://localhost:3000/api/agents" -Headers $headers
 ```
 
 **7. 無法提交到 Git（pre-commit hook 錯誤）**
-- 原因：安全檢查腳本偵測到敏感檔案
+- 原因：安全檢查工具偵測到敏感檔案
 - 解決：
   ```powershell
   # 確認 .gitignore 包含 .env 和 db/*.db
@@ -396,9 +396,9 @@ Invoke-RestMethod -Method Get -Uri "http://localhost:7894/api/agents" -Headers $
 ### 取得協助
 
 如果問題仍未解決：
-1. 執行安全檢查：`npm run security-check`
+1. 執行安全檢查（如適用）：請手動執行或使用發行版/組織提供的自動化安全檢查工具。
 2. 檢查伺服器日誌中的錯誤訊息
-3. 參考 [SECURITY-DEPLOYMENT.md](./SECURITY-DEPLOYMENT.md) 部署指南
+3. 參考安全部署指南（例如 `SECURITY-DEPLOYMENT.md`，若 repository 未提供，請參考發行版文件或自訂部署指南）
 4. 查看 [Security-Guidelines_Traditional-Chinese.md](./Security-Guidelines_Traditional-Chinese.md) 安全守則
 
 
@@ -421,10 +421,10 @@ Invoke-RestMethod -Method Get -Uri "http://localhost:7894/api/agents" -Headers $
 | 文件 | 說明 |
 |-----|------|
 | [SECURITY-UPDATE.md](./SECURITY-UPDATE.md) | 最新安全更新的完整說明 |
-| [SECURITY-DEPLOYMENT.md](./SECURITY-DEPLOYMENT.md) | 生產環境部署檢查清單與 Nginx 配置範例 |
+| 安全部署指南（可能由發行版或上游提供） | 生產環境部署檢查清單與 Nginx 配置範例 |
 | [Security-Guidelines_Traditional-Chinese.md](./Security-Guidelines_Traditional-Chinese.md) | 安全開發守則（開發前必讀） |
 | [Security-Guidelines-Explanation_Traditional-Chinese.md](./Security-Guidelines-Explanation_Traditional-Chinese.md) | 安全守則詳細說明 |
-| [GIT-SECURITY-CLEANUP.md](./GIT-SECURITY-CLEANUP.md) | Git 歷史清理指南 |
+| Git 歷史清理指南（可在上游或發行版中取得） | Git 歷史清理指南 |
 
 ### � 部署前檢查清單
 
@@ -432,13 +432,13 @@ Invoke-RestMethod -Method Get -Uri "http://localhost:7894/api/agents" -Headers $
 
 #### 環境配置
 - [ ] 已設定 `.env` 並填入正確的生產環境配置
-- [ ] 已執行 `npm run security-check` 無錯誤
+- [ ] 已執行安全檢查（例如手動檢查或發行版自動化工具）無錯誤
 - [ ] `NODE_ENV` 設為 `production`
 - [ ] `ALLOWED_ORIGINS` 僅包含 HTTPS 的公開網域（**不含 localhost**）
 - [ ] `PUBLIC_ORIGIN` 設定為實際公開網址
 
 #### 帳號與認證
-- [ ] 已執行 `npm run create-admin` 建立管理員帳號
+- [ ] 已建立管理員帳號（若 repository 未提供自動化管理工具，請使用資料庫管理工具或發行版提供的管理工具）
 - [ ] 已更改所有預設密碼（符合強度要求）
 - [ ] 已禁用或刪除測試帳號
 
@@ -467,7 +467,7 @@ server {
     ssl_certificate_key /path/to/key.pem;
 
     location / {
-        proxy_pass http://localhost:7894;
+        proxy_pass http://localhost:3000;
         proxy_http_version 1.1;
         
         # WebSocket 支援
@@ -491,7 +491,7 @@ server {
 }
 ```
 
-完整 Nginx 配置請參考 [SECURITY-DEPLOYMENT.md](./SECURITY-DEPLOYMENT.md)。
+完整 Nginx 配置請參考安全部署指南（如本 repository 未包含，請參考發行版或公司內部部署指引）。
 
 #### 2. 使用 PM2 管理程序
 
@@ -513,13 +513,13 @@ pm2 monit
 pm2 logs queue-system
 ```
 
-*注意：為了安全性，腳本預設不會在輸出中顯示明文密碼。若您確實需要在控制台一次性顯示臨時密碼，可使用 `--print-password`（例如 `npm run create-admin -- --print-password`），但它會顯示一個遮蔽（masked）版本而非明文，以避免日誌洩漏。請仍然謹慎使用以免敏感資訊出現在日誌或集中式日誌伺服器中。*
+*注意：為了安全性，管理工具預設不會在輸出中顯示明文密碼。若您需要在控制台一次性顯示臨時密碼，請評估並慎重使用，以避免敏感資訊出現在日誌或集中式日誌伺服器中。*
 #### 3. 定期維護
 
 - **每日**：檢查日誌，確認無異常活動
-- **每週**：執行 `npm run security-check`
+- **每週**：執行安全檢查（手動或使用發行版建議的自動化工具）
 - **每月**：
-*注意：重設密碼腳本預設不會在輸出中顯示明文密碼。若您確實需要在控制台一次性顯示臨時密碼，可以使用 `--print-password`（例如 `npm run reset-admin -- --generate -- --print-password`），但它會顯示一個遮蔽（masked）版本而非明文。*
+*注意：重設密碼及管理工具預設不會在輸出中顯示明文密碼；如您需要顯示臨時密碼，請謹慎評估與使用，避免漏出敏感資訊。*
   - 更新相依套件：`npm update`
   - 檢查備份完整性
 - **每季**：審查存取日誌，更新安全政策
@@ -542,21 +542,17 @@ pm2 logs queue-system
 3. 提供詳細的重現步驟
 
 
-## 套件腳本
+### 常用指令
 
 ### 開發與執行
 - `npm run dev` - 開發模式（使用 nodemon 自動重啟）
 - `npm start` - 生產模式（使用 node 啟動）
 
 ### 管理與維護
-- `npm run create-admin` - 建立新的管理員帳號
-- `npm run reset-admin` - 重設管理員密碼
-  - `npm run reset-admin -- --generate` - 自動生成密碼
-  - `npm run reset-admin -- --password=YOUR_PASSWORD` - 指定密碼
-  - `npm run reset-admin -- --account=username --create --generate` - 建立新帳號
+管理與維護操作建議使用管理介面或直接在資料庫 (SQLite) 中操作，若您在發行版中看到管理工具，請遵從該發行版本的使用說明。
 
 ### 安全檢查
-- `npm run security-check` - 執行完整安全性檢查
+若 repository 未包含 `security-check` 工具，請手動檢查 README 中列出的安全項目或使用組織/發行版提供的自動化檢查工具。
 
 ### 範例
 
@@ -568,19 +564,7 @@ npm run dev
 npm start
 
 # 建立管理員並自動生成密碼
-npm run create-admin
-
-# 重設 admin 密碼（自動生成）
-npm run reset-admin -- --generate
-
-# 重設特定帳號密碼
-npm run reset-admin -- --account=manager --password=NewPass123
-
-# 建立新的管理帳號
-npm run reset-admin -- --account=admin2 --create --generate --name="副管理員"
-
-# 執行安全檢查
-npm run security-check
+請參考本文件中「建立管理員帳號」與「重設管理員密碼」段落，使用管理介面或資料庫 (SQLite) 操作以建立與管理帳號；安全檢查請參考上文的手動檢查清單。
 ```
 
 ---
@@ -589,9 +573,9 @@ npm run security-check
 
 ### 2025-10-01 - 安全性大幅強化
 - ✅ 新增智能 CORS 處理（自動允許 localhost）
-- ✅ 新增 `reset-admin` 腳本支援密碼重設
+- ✅ 新增 `reset-admin` 管理工具支援密碼重設
 - ✅ 新增完整的前端輸入驗證工具
-- ✅ 新增自動安全檢查腳本
+- ✅ 新增自動安全檢查工具
 - ✅ 新增 Git pre-commit hook 防止敏感檔案提交
 - ✅ 改善錯誤處理，避免資訊洩漏
 - ✅ 更新環境變數配置與驗證機制

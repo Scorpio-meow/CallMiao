@@ -10,7 +10,6 @@ class AuthChecker {
   }
   checkRequiredItems() {
     const missing = this.options.requiredItems.filter(key => {
-      // support both legacy and new ui_ prefixed keys during transition
       const value = sessionStorage.getItem(key) || sessionStorage.getItem(key.replace(/^ui_/, ''));
       return !value || value.trim() === '';
     });
