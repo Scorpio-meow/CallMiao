@@ -513,13 +513,13 @@ pm2 monit
 pm2 logs queue-system
 ```
 
-*注意：為了安全性，腳本預設不會在輸出中顯示明文密碼。若您確實需要在控制台一次性顯示臨時密碼，可以使用 `--print-password`（例如 `npm run create-admin -- --print-password`），但請謹慎使用以免敏感資訊出現在日誌中。*
+*注意：為了安全性，腳本預設不會在輸出中顯示明文密碼。若您確實需要在控制台一次性顯示臨時密碼，可使用 `--print-password`（例如 `npm run create-admin -- --print-password`），但它會顯示一個遮蔽（masked）版本而非明文，以避免日誌洩漏。請仍然謹慎使用以免敏感資訊出現在日誌或集中式日誌伺服器中。*
 #### 3. 定期維護
 
 - **每日**：檢查日誌，確認無異常活動
 - **每週**：執行 `npm run security-check`
 - **每月**：
-*注意：重設密碼腳本預設不會在輸出中顯示明文密碼。若您確實需要在控制台一次性顯示臨時密碼，可以使用 `--print-password`（例如 `npm run reset-admin -- --generate -- --print-password`）。*
+*注意：重設密碼腳本預設不會在輸出中顯示明文密碼。若您確實需要在控制台一次性顯示臨時密碼，可以使用 `--print-password`（例如 `npm run reset-admin -- --generate -- --print-password`），但它會顯示一個遮蔽（masked）版本而非明文。*
   - 更新相依套件：`npm update`
   - 檢查備份完整性
 - **每季**：審查存取日誌，更新安全政策
