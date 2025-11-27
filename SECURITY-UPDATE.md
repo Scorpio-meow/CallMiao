@@ -205,6 +205,25 @@ npm run security-check
 
 ### 2025-11-27
 - 🔄 修補 Transitive Dependency: `cookie` (npm) 的安全性問題，已將 `cookie` 鎖定為 `0.7.0`（使用 npm overrides）。此舉可防止 cookie 名稱、path 或 domain 中包含惡意字元導致的繞過或 XSS 風險。
+- 🔐 實作 CSRF 防護：
+   - 使用 `csurf`（cookie 模式）與 `cookie-parser`，在伺服器端統一啟用 CSRF token，以保護 session-based 的狀態改動請求。
+   - 新增 `GET /api/csrf` 供前端取回 token，並在各管理或授權路由保護後端 API。
+   - 透過 `conditionalCsrf` 機制判斷哪些路由需要 CSRF（例如：避免對公開 kiosk endpoints 強制 CSRF）
+
+- 🛡️ 新增速率限制（Rate limiting）來減少 DoS 風險：
+   - 為票券建立、公開查詢與管理介面添加不同等級的 rate limiters（例如 `ticketCreationLimiter`, `publicReadLimiter`, `adminAgentLimiter` 與 `staticLimiter` 等）。
+   - 針對登入/驗證、產生驗證碼等敏感操作亦保有專用的 limiter。
+
+- 🌐 CORS / DevTunnel：
+   - 標準化 `ALLOWED_ORIGINS` 的讀取與比對（自動去除尾端斜線，並允許 DevTunnel 或 localhost 在開發環境中使用），減少 Origin 判斷錯誤造成的封鎖或不安全行為。
+
+- 🧪 測試/驗證腳本：
+   - 新增 `scripts/test_csrf.ps1` 為 CSRF 行為測試（包含取得 token、攜帶 cookie 與 token 呼叫受保護 API，套件檢查攔截），確保 CSRF 保護不會影響正常工作流程。
+   - 已在本地開發環境測試 POST/GET 行為與相應的 RateLimit Header 回傳。
+
+- ⚠️ 權衡與建議：
+   - `csurf` 的版本受到注意（目前在套件庫顯示已 archived），這是短期採用的實作；建議定期評估是否需要替換為其他仍在維護或官方推薦的 CSRF 中間件。
+   - 長期建議將 `agents` 的 list GET API 加固為管理員可見（視實際使用情況決定），並考慮在 CI 中加入 rate-limiter 的覆蓋測試。
 
 ---
 

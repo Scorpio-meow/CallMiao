@@ -318,6 +318,26 @@ const adminAgentLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false
 });
+const ticketCreationLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'too many ticket creations, please try later' }
+});
+const publicReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false
+});
+const staticLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req, res) => req.path && req.path.startsWith('/api')
+});
 
 // --- simple in-memory captcha store { token: { code, expiresAt }} ---
 const captchaStore = {};
@@ -456,6 +476,9 @@ app.get('/api/csrf', csurf(csrfCookieConfig), (req, res) => {
   }
 });
 
+// Apply admin limiters to agents management routes
+app.use('/api/agents', adminAgentLimiter);
+
 // --- agents management API (simple CRUD) ---
 app.get('/api/agents', (req, res) => {
   const rows = db.prepare('SELECT id, account, name, counter, role, active, createdAt, updatedAt FROM agents ORDER BY id DESC').all();
@@ -503,7 +526,8 @@ app.delete('/api/agents/:id', requireCsrf, (req, res) => {
   res.json({ ok: true });
 });
 
-// Static assets
+// Static assets - apply staticLimiter to limit unauthenticated asset requests
+app.use(staticLimiter);
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Helpers
@@ -600,7 +624,7 @@ app.get('/api/config', (req, res) => {
   }
 });
 
-app.post('/api/tickets', (req, res) => {
+app.post('/api/tickets', ticketCreationLimiter, (req, res) => {
   try {
     const { serviceType } = req.body || {};
     if (!serviceType) return res.status(400).json({ error: 'serviceType is required' });
@@ -620,7 +644,7 @@ app.post('/api/tickets', (req, res) => {
   }
 });
 
-app.get('/api/tickets/waiting', (req, res) => {
+app.get('/api/tickets/waiting', publicReadLimiter, (req, res) => {
   const { serviceType } = req.query;
   const rows = db.prepare(`
     SELECT id, serviceType, number, status, createdAt
@@ -633,7 +657,7 @@ app.get('/api/tickets/waiting', (req, res) => {
 });
 
 // Public ticket detail
-app.get('/api/ticket/:id', (req, res) => {
+app.get('/api/ticket/:id', publicReadLimiter, (req, res) => {
   const { id } = req.params;
   const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(id);
   if (!row) return res.status(404).json({ error: 'not found' });
@@ -648,7 +672,7 @@ app.get('/api/agent/ticket/:id', (req, res) => {
   res.json({ ticket: row });
 });
 
-app.get('/api/overview', (req, res) => {
+app.get('/api/overview', publicReadLimiter, (req, res) => {
   res.json(getOverview());
 });
 
@@ -954,4 +978,28 @@ app.use((err, req, res, next) => {
     return res.status(403).json({ error: 'invalid csrf token' });
   }
   next(err);
+});
+
+// Body-parser JSON parse error handler: return a clean 400 rather than printing stack
+app.use((err, req, res, next) => {
+  // body-parser sets err.type === 'entity.parse.failed' for parse failures
+  const isJsonParseError = err && (err.type === 'entity.parse.failed' || (err instanceof SyntaxError && err.status === 400 && 'body' in err));
+  if (isJsonParseError) {
+    if (!isProdEnv) {
+      console.warn('⚠️  Received invalid JSON payload from', req.ip || req.get('x-forwarded-for') || req.connection.remoteAddress);
+    }
+    return res.status(400).json({ error: 'invalid JSON' });
+  }
+  next(err);
+});
+
+// Generic error handler - logs concise messages in production and full stack in dev
+app.use((err, req, res, next) => {
+  if (!err) return next();
+  if (isProdEnv) {
+    console.error('Unhandled error:', err.message || err);
+    return res.status(500).json({ error: 'internal server error' });
+  }
+  console.error('Unhandled error (dev):', err && err.stack ? err.stack : err);
+  res.status(500).json({ error: 'internal server error', details: err && err.message ? err.message : undefined });
 });
