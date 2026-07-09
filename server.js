@@ -47,8 +47,6 @@ if (isProdEnv) {
     console.error('\nPlease set these in your .env file or environment configuration.');
     console.error('Continuing with default values, but this is NOT recommended for production!\n');
   }
-  
-  // Warn if using localhost origins in production
   if (ALLOWED_ORIGINS.some(o => o.includes('localhost') || o.includes('127.0.0.1'))) {
     console.warn('\n⚠️  WARNING: ALLOWED_ORIGINS contains localhost addresses in production mode!');
     console.warn('   This may be a security risk. Please review your CORS configuration.\n');
@@ -57,22 +55,16 @@ if (isProdEnv) {
   console.log('🔧 Running in DEVELOPMENT mode');
   console.log(`📍 Auto-allowing origin: http://localhost:${PORT}`);
 }
-
-// Ensure db folder exists
 const dbDir = path.join(__dirname, 'db');
 if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
-
 const dbPath = path.join(dbDir, 'queue.db');
 const db = new Database(dbPath);
-
 db.pragma('journal_mode = WAL');
-// If DB is temporarily locked by another process, wait up to 5s before failing
 try {
   db.pragma('busy_timeout = 5000');
 } catch (e) {
   console.warn('Could not set busy_timeout pragma', e && e.message);
 }
-
 try {
   db.exec(`
 CREATE TABLE IF NOT EXISTS seq (
@@ -81,7 +73,6 @@ CREATE TABLE IF NOT EXISTS seq (
   seq INTEGER NOT NULL,
   PRIMARY KEY (serviceType, ymd)
 );
-
 CREATE TABLE IF NOT EXISTS tickets (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   serviceType TEXT NOT NULL,
@@ -100,7 +91,6 @@ CREATE TABLE IF NOT EXISTS tickets (
   }
   throw err;
 }
-// create agents table
 try {
   db.exec(`
 CREATE TABLE IF NOT EXISTS agents (
@@ -121,11 +111,8 @@ CREATE TABLE IF NOT EXISTS agents (
   }
   throw err;
 }
-
 function getNextNumber(serviceType) {
   const ymd = dayjs().format('YYYYMMDD');
-  // Use a database transaction to ensure selecting and updating/inserting
-  // the seq row happens atomically to avoid race conditions under concurrent calls.
   const getNext = db.transaction((svc) => {
     const ymd = dayjs().format('YYYYMMDD');
     const row = db.prepare('SELECT seq FROM seq WHERE serviceType=? AND ymd=?').get(svc, ymd);
@@ -140,58 +127,36 @@ function getNextNumber(serviceType) {
     const padded = String(next).padStart(3, '0');
     return `${svc}${padded}`;
   });
-
-  // Call the transaction function with the provided serviceType
   return getNext(serviceType);
 }
-
 const app = express();
-// Trust reverse proxy headers (needed for dev tunnels / reverse proxies)
-// This allows express-rate-limit to safely use X-Forwarded-For for client IP.
 app.set('trust proxy', 1);
 const server = http.createServer(app);
 const { Server } = require('socket.io');
 const io = new Server(server, { cors: { origin: ALLOWED_ORIGINS } });
-
-// CORS: only allow explicit origins in allowlist; same-origin requests (no Origin header) are allowed
 app.use(cors({
   origin: (origin, cb) => {
-    // No Origin header = same-origin request (direct navigation, not CORS)
-    // These should be allowed in both dev and production
     if (!origin) {
       return cb(null, true);
     }
-    
-    // In development, auto-allow localhost/127.0.0.1 on any port for convenience
     if (!isProdEnv) {
       const isLocalhost = origin.match(/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/);
       if (isLocalhost) return cb(null, true);
     }
-    
-    // Also allow localhost on the current PORT (useful for DevTunnel scenarios)
-    // where you're running in "production" mode but testing locally
     const currentLocalhost = `http://localhost:${PORT}`;
     if (origin === currentLocalhost) {
       return cb(null, true);
     }
-    
-    // Check if origin is in allowlist
     const normalizedOrigin = origin.replace(/\/$/, '');
     if (ALLOWED_ORIGINS.includes(normalizedOrigin)) return cb(null, true);
-    
-    // Log denied origins for security monitoring
     console.warn(`⚠️  CORS blocked: ${origin} (not in allowlist)`);
     return cb(new Error('CORS origin denied'));
   },
   credentials: true
 }));
-// Limit request body size to avoid large or unexpected payloads and reduce parser stress
 app.use(express.json({ limit: '100kb' }));
 app.use(express.urlencoded({ extended: true, limit: '100kb' }));
-// cookie parser required by csurf when using cookie-based tokens
 app.use(cookieParser());
-
-// Session configuration - MUST be before routes
 const SQLiteStore = require('connect-sqlite3')(session);
 app.use(session({
   store: new SQLiteStore({
@@ -202,50 +167,28 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: isProdEnv, // Require HTTPS in production
-    httpOnly: true,    // Prevent JavaScript access (XSS protection)
-    maxAge: 8 * 60 * 60 * 1000, // 8 hours
+    secure: isProdEnv,
+    httpOnly: true,
+    maxAge: 8 * 60 * 60 * 1000,
     sameSite: 'lax'
   },
-  name: 'queueSessionId' // Custom session cookie name
+  name: 'queueSessionId'
 }));
-
-// --- CSRF protection ---
-// Use csurf for session-based endpoints. We purposely only apply CSRF to
-// authenticated agent/admin endpoints (under /api/agent and /api/agents) and
-// to other session-protected admin routes. Public endpoints like /api/tickets
-// remain accessible for kiosks/devices that don't use CSRF tokens.
-// csurf must be registered after the session middleware so it can access the session store.
-// Accept token via request body, query, or headers (x-csrf-token / x-xsrf-token).
 const csrfCookieConfig = { cookie: { httpOnly: true, sameSite: 'lax', secure: isProdEnv } };
 const csrfProtection = csurf(csrfCookieConfig);
-
-// Conditional middleware: apply CSRF to all non-safe methods except for
-// explicitly exempted public endpoints.
 function conditionalCsrf(req, res, next) {
-  // Always skip for safe methods
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
-
-  // Exempt public APIs that must remain unauthenticated (kiosk, qrcode, captcha)
   const exemptPaths = [
     '/api/tickets',
     '/api/qrcode',
-    '/api/admin/csrf', // legacy compatibility: allow admin UI to request token without csurf
+    '/api/admin/csrf',
   ];
   if (exemptPaths.includes(req.path)) return next();
   if (req.path.startsWith('/api/captcha')) return next();
-
-  // Exempt login (creating a session) to avoid login CSRF issues.
-  // Logout is state changing and should be protected.
   if (req.path === '/api/login') return next();
-
-  // Otherwise apply csrf protection
   return csrfProtection(req, res, next);
 }
-
 app.use(conditionalCsrf);
-
-// Security headers using helmet
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -258,8 +201,6 @@ app.use(helmet({
     }
   }
 }));
-
-// Minimal CSP to allow our local app (scripts/styles inline for demo) and websockets
 app.use((req, res, next) => {
   res.setHeader(
     'Content-Security-Policy',
@@ -267,8 +208,6 @@ app.use((req, res, next) => {
   );
   next();
 });
-
-// --- Rate limiters ---
 const isProd = process.env.NODE_ENV === 'production';
 const commonLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -321,44 +260,30 @@ const staticLimiter = rateLimit({
   legacyHeaders: false,
   skip: (req, res) => req.path && req.path.startsWith('/api')
 });
-
-// --- simple in-memory captcha store { token: { code, expiresAt }} ---
 const captchaStore = {};
 const svgCaptcha = require('svg-captcha');
 function genToken() { return Math.random().toString(36).slice(2, 10); }
-
-// --- simple in-memory CSRF store for admin UI { token: { createdAt }} ---
 const csrfStore = {};
 function genCsrf() { return Math.random().toString(36).slice(2, 12) + Date.now().toString(36); }
-// purge expired csrf tokens every 5 minutes (tokens valid 15 minutes)
 setInterval(() => {
   const now = Date.now();
   for (const t in csrfStore) { if (now - (csrfStore[t].createdAt || 0) > 15 * 60 * 1000) delete csrfStore[t]; }
 }, 5 * 60 * 1000);
-
-// purge expired captchas every minute
 setInterval(() => {
   const now = Date.now();
   for (const t in captchaStore) { if (captchaStore[t].expiresAt < now) delete captchaStore[t]; }
 }, 60 * 1000);
-
-// Get a new captcha token
 app.get('/api/captcha/new', captchaLimiter, (req, res) => {
   const token = genToken();
   const expiresAt = Date.now() + (5 * 60 * 1000);
-  // generate and store placeholder; image route will regenerate SVG/PNG fresh to avoid caching issues
   const captcha = svgCaptcha.create({ noise: 3, size: 6, color: true, background: '#f3f4f6', width: 160, height: 60 });
-  // store both text and svg so image endpoint can use exact svg for PNG conversion
   captchaStore[token] = { code: captcha.text, svg: captcha.data, expiresAt };
   res.json({ token, expiresAt });
 });
-
-// Return PNG image for a given token
 app.get('/api/captcha/image/:token', captchaLimiter, async (req, res) => {
   const { token } = req.params;
   const rec = captchaStore[token];
   if (!rec || rec.expiresAt < Date.now()) return res.status(404).send('invalid token');
-  // use the stored SVG (created when token was issued) to avoid fragile replacements
   try {
     const svg = rec.svg || (`<svg xmlns="http://www.w3.org/2000/svg"><text>${rec.code}</text></svg>`);
     let sharpLib = null;
@@ -374,30 +299,22 @@ app.get('/api/captcha/image/:token', captchaLimiter, async (req, res) => {
       res.send(svg);
     }
   } catch (err) {
-    // Log detailed error for debugging, but send generic message to client
     console.error('Captcha image generation error:', isProdEnv ? err.message : err);
     res.status(500).send('captcha error');
   }
 });
-
-// Login endpoint: validate captcha token + code, then verify real agent credentials
 app.post('/api/login', loginLimiter, (req, res) => {
   const { account, password, captchaToken, captcha } = req.body || {};
   if (!captchaToken || !captcha) return res.status(400).json({ error: 'captcha required' });
   const rec = captchaStore[captchaToken];
   if (!rec) return res.status(400).json({ error: 'invalid or expired captcha token' });
-  // compare case-insensitive to be more user friendly
   if (String(rec.code).toLowerCase() !== String(captcha).toLowerCase()) return res.status(400).json({ error: 'captcha mismatch' });
-  // consume
   delete captchaStore[captchaToken];
-  // Verify credentials strictly
   if (!account) return res.status(401).json({ error: 'invalid credentials' });
   const user = db.prepare('SELECT * FROM agents WHERE account=?').get(account);
   if (!user) return res.status(401).json({ error: 'invalid credentials' });
   const ok = (user.password && password) ? bcrypt.compareSync(String(password), String(user.password)) : false;
   if (!ok) return res.status(401).json({ error: 'invalid credentials' });
-  
-  // Store authentication info in server-side session
   req.session.agent = {
     id: user.id,
     account: user.account,
@@ -405,10 +322,8 @@ app.post('/api/login', loginLimiter, (req, res) => {
     counter: user.counter,
     role: user.role
   };
-  
-  // Return agent info to frontend (frontend can still use sessionStorage for UI display)
-  return res.json({ 
-    ok: true, 
+  return res.json({
+    ok: true,
     agent: {
       id: user.id,
       account: user.account,
@@ -418,8 +333,6 @@ app.post('/api/login', loginLimiter, (req, res) => {
     }
   });
 });
-
-// Logout endpoint: destroy server-side session
 app.post('/api/logout', (req, res) => {
   if (req.session) {
     req.session.destroy(err => {
@@ -434,8 +347,6 @@ app.post('/api/logout', (req, res) => {
     res.json({ ok: true });
   }
 });
-
-// Issue a CSRF token for admin UI
 app.post('/api/admin/csrf', adminAgentLimiter, (req, res) => {
   try {
     const token = genCsrf();
@@ -443,17 +354,10 @@ app.post('/api/admin/csrf', adminAgentLimiter, (req, res) => {
     res.json({ csrfToken: token, expiresIn: 15 * 60 });
   } catch (err) { res.status(500).json({ error: 'csrf error' }); }
 });
-
-// Return a CSRF token for JavaScript clients that use session-based APIs
-// The token returned here is validated by the csurf middleware. It should be
-// called by frontends and then used in subsequent state-changing requests via
-// 'X-CSRF-Token' header or by including in the request body as '_csrf'.
 app.get('/api/csrf', csurf(csrfCookieConfig), (req, res) => {
   try {
-    // req.csrfToken() will throw if no csurf middleware is active for this request.
     const token = req.csrfToken ? req.csrfToken() : null;
     if (!token) return res.status(400).json({ error: 'csrf not available' });
-    // Debug log: show whether Set-Cookie header is present (useful for cookie-based CSRF)
     try {
       const setCookie = res.getHeader && res.getHeader('Set-Cookie');
       console.debug('CSRF token issued', {
@@ -463,8 +367,6 @@ app.get('/api/csrf', csurf(csrfCookieConfig), (req, res) => {
         setCookie: !!setCookie
       });
     } catch (e) { /* ignore */ }
-    // For client convenience, set an accessible (non-HttpOnly) cookie named 'XSRF-TOKEN'
-    // so JavaScript clients can read it if needed. Keep cookie attributes aligned with csrfCookieConfig.
     try {
       res.cookie('XSRF-TOKEN', token, {
         httpOnly: false,
@@ -479,16 +381,11 @@ app.get('/api/csrf', csurf(csrfCookieConfig), (req, res) => {
     res.status(500).json({ error: 'csrf error' });
   }
 });
-
-// Apply admin limiters to agents management routes
 app.use('/api/agents', adminAgentLimiter);
-
-// --- agents management API (simple CRUD) ---
 app.get('/api/agents', (req, res) => {
   const rows = db.prepare('SELECT id, account, name, counter, role, active, createdAt, updatedAt FROM agents ORDER BY id DESC').all();
   res.json({ agents: rows });
 });
-
 app.post('/api/agents', requireCsrf, (req, res) => {
   const { account, name, password, counter, role } = req.body || {};
   if (!account || !password) return res.status(400).json({ error: 'account and password required' });
@@ -504,13 +401,11 @@ app.post('/api/agents', requireCsrf, (req, res) => {
     res.status(500).json({ error: 'create failed' });
   }
 });
-
 app.get('/api/agents/:id', (req, res) => {
   const row = db.prepare('SELECT id, account, name, counter, role, active, createdAt, updatedAt FROM agents WHERE id=?').get(req.params.id);
   if (!row) return res.status(404).json({ error: 'not found' });
   res.json({ agent: row });
 });
-
 app.put('/api/agents/:id', requireCsrf, (req, res) => {
   const id = req.params.id;
   const { name, password, counter, role, active } = req.body || {};
@@ -523,23 +418,17 @@ app.put('/api/agents/:id', requireCsrf, (req, res) => {
   const row = db.prepare('SELECT id, account, name, counter, role, active, createdAt, updatedAt FROM agents WHERE id=?').get(id);
   res.json({ agent: row });
 });
-
 app.delete('/api/agents/:id', requireCsrf, (req, res) => {
   const id = req.params.id;
   db.prepare('DELETE FROM agents WHERE id=?').run(id);
   res.json({ ok: true });
 });
-
-// Static assets - apply staticLimiter to limit unauthenticated asset requests
 app.use(staticLimiter);
 app.use(express.static(path.join(__dirname, 'public')));
-
-// Helpers
 function emitQueueUpdate(serviceType) {
   const overview = getOverview();
   io.emit('queue:update', { serviceType, overview });
 }
-
 function getOverview() {
   const rows = db.prepare(`
     SELECT serviceType,
@@ -559,33 +448,23 @@ function getOverview() {
   `).all();
   return { summary: rows, currentCalls };
 }
-
-// API routes
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, time: new Date().toISOString() });
 });
-
-// Return runtime config useful for clients that need to generate public links (QR)
 function inferPublicOrigin(req) {
   if (PUBLIC_ORIGIN) return PUBLIC_ORIGIN;
-  // respect X-Forwarded-Proto when behind reverse proxies (nginx, cloudflare, tunnels)
   const forwardedProto = (req.get('x-forwarded-proto') || '').split(',')[0];
   const proto = forwardedProto || req.protocol || 'http';
-  // Prefer x-forwarded-host if present (some proxies/tunnels preserve original host here)
   const forwardedHost = (req.get('x-forwarded-host') || req.get('x-forwarded-hostname') || '').split(',')[0];
   const host = forwardedHost || req.get('host') || `localhost:${PORT}`;
-  // Debug: log incoming headers that affect origin detection when not running locally
   if ((!process.env.NODE_ENV || process.env.NODE_ENV !== 'development') && forwardedHost && forwardedHost !== req.get('host')) {
     console.debug('inferPublicOrigin: using forwarded host', { forwardedHost, hostHeader: req.get('host'), forwardedProto });
   }
   return `${proto}://${host}`;
 }
-
-// 檢查目前環境類型
 function detectEnvironment(req) {
   const host = req.get('host') || `localhost:${PORT}`;
   const hostname = host.split(':')[0];
-  
   const env = {
     isLocal: false,
     isDevTunnel: false,
@@ -594,32 +473,23 @@ function detectEnvironment(req) {
     port: PORT,
     nodeEnv: process.env.NODE_ENV || 'development'
   };
-
-  // 檢查是否為本地環境
-  if (hostname === 'localhost' || hostname === '127.0.0.1' || 
-      hostname.startsWith('192.168.') || hostname.startsWith('10.')) {
+  if (hostname === 'localhost' || hostname === '127.0.0.1' ||
+    hostname.startsWith('192.168.') || hostname.startsWith('10.')) {
     env.isLocal = true;
   }
-  
-  // 檢查是否為 DevTunnel
   if (hostname.includes('devtunnels.ms')) {
     env.isDevTunnel = true;
   }
-  
-  // 檢查是否為正式環境
   if (!env.isLocal && !env.isDevTunnel) {
     env.isProduction = true;
   }
-
   return env;
 }
-
 app.get('/api/config', (req, res) => {
   try {
     const publicOrigin = inferPublicOrigin(req);
     const environment = detectEnvironment(req);
-    
-    res.json({ 
+    res.json({
       publicOrigin,
       environment,
       allowedOrigins: ALLOWED_ORIGINS,
@@ -633,12 +503,10 @@ app.get('/api/config', (req, res) => {
     res.status(500).json({ error: 'config error' });
   }
 });
-
 app.post('/api/tickets', ticketCreationLimiter, (req, res) => {
   try {
     const { serviceType } = req.body || {};
     if (!serviceType) return res.status(400).json({ error: 'serviceType is required' });
-    
     const createdAt = dayjs().toISOString();
     const number = getNextNumber(serviceType.toUpperCase());
     const info = db.prepare(`
@@ -653,7 +521,6 @@ app.post('/api/tickets', ticketCreationLimiter, (req, res) => {
     res.status(500).json({ error: 'create failed' });
   }
 });
-
 app.get('/api/tickets/waiting', publicReadLimiter, (req, res) => {
   const { serviceType } = req.query;
   const rows = db.prepare(`
@@ -665,42 +532,30 @@ app.get('/api/tickets/waiting', publicReadLimiter, (req, res) => {
   `).all(serviceType ? [serviceType.toUpperCase()] : []);
   res.json({ tickets: rows });
 });
-
-// Public ticket detail
 app.get('/api/ticket/:id', publicReadLimiter, (req, res) => {
   const { id } = req.params;
   const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(id);
   if (!row) return res.status(404).json({ error: 'not found' });
   res.json({ ticket: row });
 });
-
-// Protected ticket detail for agents
 app.get('/api/agent/ticket/:id', (req, res) => {
   const { id } = req.params;
   const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(id);
   if (!row) return res.status(404).json({ error: 'not found' });
   res.json({ ticket: row });
 });
-
 app.get('/api/overview', publicReadLimiter, (req, res) => {
   res.json(getOverview());
 });
-
 function requireAgentAuth(req, res, next) {
-  // Check server-side session instead of headers
   if (!req.session || !req.session.agent) {
     return res.status(401).json({ error: 'unauthorized - not logged in' });
   }
-  
-  // Verify agent still exists and is active
   const agent = db.prepare('SELECT * FROM agents WHERE id=? AND active=1').get(req.session.agent.id);
   if (!agent) {
-    // Account was disabled or deleted, destroy session
     req.session.destroy();
     return res.status(401).json({ error: 'unauthorized - account disabled' });
   }
-  
-  // Update session with latest agent info
   req.session.agent = {
     id: agent.id,
     account: agent.account,
@@ -708,38 +563,24 @@ function requireAgentAuth(req, res, next) {
     counter: agent.counter,
     role: agent.role
   };
-  
-  // Store agent info for use in route handler
   req.authenticatedAgent = agent;
   next();
 }
-
 function requireCsrf(req, res, next) {
-  // Only check session and admin role; CSRF token validation is now handled by csurf
-  // as a separate middleware registered globally. The original in-memory csrfStore
-  // is kept for compatibility but not required here.
-  
-  // Additionally check if user is logged in and is admin (for admin-only endpoints)
   if (!req.session || !req.session.agent) {
     return res.status(401).json({ error: 'unauthorized - not logged in' });
   }
-  
   if (req.session.agent.role !== 'admin') {
     return res.status(403).json({ error: 'forbidden - admin only' });
   }
-  
   next();
 }
-
-// Apply rate limiter to all /api/agent/* endpoints
 app.use('/api/agent', adminAgentLimiter);
-
 app.post('/api/agent/callNext', requireAgentAuth, (req, res) => {
   const { serviceType, counter } = req.body || {};
   if (!serviceType) return res.status(400).json({ error: 'serviceType is required' });
   const ctr = (counter === undefined || counter === null) ? '' : String(counter).trim();
   if (!ctr) return res.status(400).json({ error: 'counter is required' });
-  // Prevent same counter from calling multiple tickets at once
   const busy = db.prepare("SELECT id FROM tickets WHERE counter=? AND status IN ('called','serving') LIMIT 1").get(ctr);
   if (busy) return res.status(409).json({ error: 'counter busy', ticketId: busy.id });
   const ticket = db.prepare(`
@@ -757,21 +598,18 @@ app.post('/api/agent/callNext', requireAgentAuth, (req, res) => {
   emitQueueUpdate(serviceType.toUpperCase());
   res.json({ ticket: updated });
 });
-
 app.post('/api/agent/finish', requireAgentAuth, (req, res) => {
   const { ticketId, result } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: 'ticketId is required' });
   const finishedAt = dayjs().toISOString();
   const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
   if (!row) return res.status(404).json({ error: 'not found' });
-  
   db.prepare('UPDATE tickets SET status=?, finishedAt=?, result=? WHERE id=?')
     .run('finished', finishedAt, result || null, ticketId);
   const updated = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
   emitQueueUpdate(updated.serviceType);
   res.json({ ticket: updated });
 });
-
 app.post('/api/agent/markServing', requireAgentAuth, (req, res) => {
   const { ticketId } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: 'ticketId is required' });
@@ -782,8 +620,6 @@ app.post('/api/agent/markServing', requireAgentAuth, (req, res) => {
   emitQueueUpdate(updated.serviceType);
   res.json({ ticket: updated });
 });
-
-// Recall: re-trigger call for an already called ticket (keep status 'called', update calledAt)
 app.post('/api/agent/recall', requireAgentAuth, (req, res) => {
   const { ticketId } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: 'ticketId is required' });
@@ -797,8 +633,6 @@ app.post('/api/agent/recall', requireAgentAuth, (req, res) => {
   emitQueueUpdate(updated.serviceType);
   res.json({ ticket: updated });
 });
-
-// Cancel: mark a ticket as canceled
 app.post('/api/agent/cancel', requireAgentAuth, (req, res) => {
   const { ticketId, reason } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: 'ticketId is required' });
@@ -811,8 +645,6 @@ app.post('/api/agent/cancel', requireAgentAuth, (req, res) => {
   emitQueueUpdate(updated.serviceType);
   res.json({ ticket: updated });
 });
-
-// Transfer: change serviceType and/or counter; reset to waiting by default
 app.post('/api/agent/transfer', requireAgentAuth, (req, res) => {
   const { ticketId, toServiceType, toCounter, keepStatus } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: 'ticketId is required' });
@@ -822,7 +654,6 @@ app.post('/api/agent/transfer', requireAgentAuth, (req, res) => {
   const status = keepStatus ? row.status : 'waiting';
   const calledAt = keepStatus ? row.calledAt : null;
   const counter = toCounter !== undefined ? toCounter : (keepStatus ? row.counter : null);
-  // If keeping status (e.g., remain 'called' or 'serving') and assigning a counter, ensure that counter is not already busy
   if (keepStatus && counter) {
     const ctr = String(counter);
     const busy = db.prepare("SELECT id FROM tickets WHERE counter=? AND status IN ('called','serving') LIMIT 1").get(ctr);
@@ -834,13 +665,10 @@ app.post('/api/agent/transfer', requireAgentAuth, (req, res) => {
   emitQueueUpdate(updated.serviceType);
   res.json({ ticket: updated });
 });
-
-// Agent creates a new ticket (counter-created)
 app.post('/api/agent/createTicket', requireAgentAuth, (req, res) => {
   try {
     const { serviceType } = req.body || {};
     if (!serviceType) return res.status(400).json({ error: 'serviceType is required' });
-    
     const createdAt = dayjs().toISOString();
     const number = getNextNumber(serviceType.toUpperCase());
     const info = db.prepare(`
@@ -855,14 +683,11 @@ app.post('/api/agent/createTicket', requireAgentAuth, (req, res) => {
     res.status(500).json({ error: 'create failed' });
   }
 });
-
-// Call a specific ticket by id
 app.post('/api/agent/callSpecific', requireAgentAuth, (req, res) => {
   const { ticketId, counter, internal } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: 'ticketId is required' });
   const ctr = (counter === undefined || counter === null) ? '' : String(counter).trim();
   if (!ctr) return res.status(400).json({ error: 'counter is required' });
-  // Prevent same counter from calling multiple tickets at once; allow if busy ticket is the same one being called
   const busy = db.prepare("SELECT id FROM tickets WHERE counter=? AND status IN ('called','serving') LIMIT 1").get(ctr);
   if (busy && String(busy.id) !== String(ticketId)) return res.status(409).json({ error: 'counter busy', ticketId: busy.id });
   const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
@@ -875,8 +700,6 @@ app.post('/api/agent/callSpecific', requireAgentAuth, (req, res) => {
   emitQueueUpdate(updated.serviceType);
   res.json({ ticket: updated });
 });
-
-// History of served/canceled tickets
 app.get('/api/agent/history', requireAgentAuth, (req, res) => {
   const limit = Math.min(parseInt(req.query.limit || '100', 10), 500);
   const serviceType = req.query.serviceType ? String(req.query.serviceType).toUpperCase() : null;
@@ -889,24 +712,19 @@ app.get('/api/agent/history', requireAgentAuth, (req, res) => {
   `).all(...(serviceType ? [serviceType, limit] : [limit]));
   res.json({ tickets: rows });
 });
-
-// Agent messaging (broadcast to agents)
 app.post('/api/agent/message', requireAgentAuth, (req, res) => {
   const { text, from, toCounter, toAgent } = req.body || {};
   if (!text) return res.status(400).json({ error: 'text is required' });
   const payload = { text, from: from || 'agent', toCounter: toCounter || null, toAgent: toAgent || null, time: new Date().toISOString() };
   try {
-    // If a specific counter is targeted, emit only to that counter room
     if (toCounter) {
       io.to(`counter:${String(toCounter)}`).emit('agent:message', payload);
       return res.json({ ok: true, targeted: 'counter', toCounter });
     }
-    // If a specific agent name is targeted, emit only to that agent room
     if (toAgent) {
       io.to(`agent:${String(toAgent)}`).emit('agent:message', payload);
       return res.json({ ok: true, targeted: 'agent', toAgent });
     }
-    // Otherwise broadcast to all agents
     io.emit('agent:message', payload);
     res.json({ ok: true });
   } catch (err) {
@@ -914,13 +732,8 @@ app.post('/api/agent/message', requireAgentAuth, (req, res) => {
     res.status(500).json({ error: 'message send failed' });
   }
 });
-
-// Agent profile management: get current agent's info by account from header
 app.get('/api/agent/profile', requireAgentAuth, (req, res) => {
-  // Use the authenticated agent from middleware
   const agent = req.authenticatedAgent;
-  
-  // Return safe agent data (exclude password)
   const safeAgent = {
     id: agent.id,
     account: agent.account,
@@ -931,32 +744,23 @@ app.get('/api/agent/profile', requireAgentAuth, (req, res) => {
     createdAt: agent.createdAt,
     updatedAt: agent.updatedAt
   };
-  
   res.json({ agent: safeAgent });
 });
-
-// Agent profile management: update current agent's info (limited fields)
 app.put('/api/agent/profile', requireAgentAuth, (req, res) => {
   const agent = req.authenticatedAgent;
   const { name, password, counter } = req.body || {};
   const now = dayjs().toISOString();
-  
-  // Agents can update their name, password, and counter
   let hash = agent.password;
   if (password) {
     hash = bcrypt.hashSync(String(password), 10);
   }
-  
   const updateName = name || agent.name;
   const updateCounter = counter || agent.counter;
-  
   db.prepare('UPDATE agents SET name=?, password=?, counter=?, updatedAt=? WHERE id=?')
     .run(updateName, hash, updateCounter, now, agent.id);
-  
   const updated = db.prepare('SELECT id, account, name, counter, role, active, createdAt, updatedAt FROM agents WHERE id=?').get(agent.id);
   res.json({ agent: updated });
 });
-
 app.get('/api/qrcode', qrcodeLimiter, async (req, res) => {
   try {
     const text = req.query.text;
@@ -968,23 +772,39 @@ app.get('/api/qrcode', qrcodeLimiter, async (req, res) => {
     res.status(500).send('qrcode error');
   }
 });
-
 io.on('connection', (socket) => {
   socket.on('join', (room) => socket.join(room));
   socket.on('leave', (room) => {
     try { socket.leave(room); } catch (e) { /* noop */ }
   });
 });
-
-server.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+const args = process.argv.slice(2);
+const hasHostFlag = args.includes('--host');
+const bindHost = hasHostFlag ? '0.0.0.0' : 'localhost';
+server.listen(PORT, bindHost, () => {
+  const protocol = 'http';
+  if (hasHostFlag) {
+    const os = require('os');
+    const interfaces = os.networkInterfaces();
+    const networkIps = [];
+    for (const name of Object.keys(interfaces)) {
+      for (const iface of interfaces[name]) {
+        if ((iface.family === 'IPv4' || iface.family === 4) && !iface.internal) {
+          networkIps.push(iface.address);
+        }
+      }
+    }
+    console.log(`Server running on:`);
+    console.log(`  - Local:   ${protocol}://localhost:${PORT}`);
+    networkIps.forEach(ip => {
+      console.log(`  - Network: ${protocol}://${ip}:${PORT}`);
+    });
+  } else {
+    console.log(`Server running on ${protocol}://localhost:${PORT}`);
+  }
 });
-
-// CSRF error handler - this should be registered after other middleware/routes
 app.use((err, req, res, next) => {
   if (err && err.code === 'EBADCSRFTOKEN') {
-    // log and return 403
-    // Helpful debug: include request path/method/origin, and whether session/cookie present
     const origin = req.get('origin') || req.get('host');
     const cookieHeader = req.get('cookie') || '';
     console.warn('⚠️  Invalid CSRF token detected', err.message || '', JSON.stringify({
@@ -992,16 +812,13 @@ app.use((err, req, res, next) => {
       method: req.method,
       origin,
       cookiePresent: !!cookieHeader,
-      cookieSample: cookieHeader ? cookieHeader.split(';').slice(0,3).join(';') : ''
+      cookieSample: cookieHeader ? cookieHeader.split(';').slice(0, 3).join(';') : ''
     }));
     return res.status(403).json({ error: 'invalid csrf token' });
   }
   next(err);
 });
-
-// Body-parser JSON parse error handler: return a clean 400 rather than printing stack
 app.use((err, req, res, next) => {
-  // body-parser sets err.type === 'entity.parse.failed' for parse failures
   const isJsonParseError = err && (err.type === 'entity.parse.failed' || (err instanceof SyntaxError && err.status === 400 && 'body' in err));
   if (isJsonParseError) {
     if (!isProdEnv) {
@@ -1011,8 +828,6 @@ app.use((err, req, res, next) => {
   }
   next(err);
 });
-
-// Generic error handler - logs concise messages in production and full stack in dev
 app.use((err, req, res, next) => {
   if (!err) return next();
   if (isProdEnv) {

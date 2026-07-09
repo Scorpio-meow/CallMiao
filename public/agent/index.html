@@ -13,8 +13,6 @@
 
 <body>
     <div class="container agent-red">
-
-        <!-- Header / Tabs -->
         <div class="agent-header">
             <div class="left">
                 <h1 class="title">櫃員設定</h1>
@@ -23,20 +21,12 @@
                 </div>
             </div>
             <div class="right">
-                <!--div class="tabbar">
-                    <button id="openSecondScreen" class="tab active">第二螢幕</button>
-                    <button class="tab" disabled>滿意度評鑑</button>
-                    <button class="tab" disabled>重新評鑑</button>
-                </div-->
-                <!-- auth controls (PIN removed) -->
                 <div class="auth compact">
                     <button class="btn btn-light" id="logoutBtn" title="登出">登出</button>
                     <span id="authStatus" class="muted"></span>
                 </div>
             </div>
         </div>
-
-        <!-- Info + Stats + Service/Counter small controls -->
         <div class="top-info">
             <div class="info-grid">
                 <div class="info-field">
@@ -58,16 +48,13 @@
                     </div>
                 </div>
             </div>
-
             <div class="stat">
                 <div class="label">總等待人數</div>
                 <div class="value" id="totalWaitCount">0</div>
             </div>
         </div>
-
         <table class="w-100">
             <td class="w-49">
-                <!-- Footer clock and category list -->
                 <div class="footer-info">
                     <div class="clock" id="clock">—</div>
                     <h3 class="section-title">客戶等候名單</h3>
@@ -75,25 +62,21 @@
                 </div>
             </td>
             <td class="w-49">
-                <!-- Operations matrix -->
                 <div class="ops-grid">
                     <button class="btn btn-primary op" id="callNext" title="N">叫號</button>
                     <button class="btn btn-secondary op" id="markServing" title="S">開始服務</button>
                     <button class="btn btn-primary op outline" id="recall" title="R">重叫號</button>
                     <button class="btn btn-success op" id="finish" title="F">結束服務</button>
                     <button class="btn btn-danger op" id="cancel" title="X">取消叫號</button>
-
                     <button class="btn btn-light op" id="transfer">轉櫃/轉服務</button>
                     <button class="btn btn-light op" id="createTicket">櫃檯取號</button>
                     <button class="btn btn-light op" id="pickup">未取號補取</button>
                     <button class="btn btn-light op" id="internalCall">內部叫號</button>
-
                     <button class="btn btn-light op" id="pause">暫停服務</button>
                     <button class="btn btn-light op" id="callSpecific">指定叫號</button>
                     <button class="btn btn-light op" id="history">歷史叫號查詢</button>
                     <button class="btn btn-light op" id="message">密傳訊息</button>
                 </div>
-
                 <div class="verify-line">
                     <input id="ticketId" placeholder="ticket number" />
                     <button id="pickFromInput" class="btn btn-light">選取</button>
@@ -101,12 +84,8 @@
                     <input type="hidden" id="serviceType" value="A" />
                 </div>
                 <div id="selectedInfo" class="service-compact muted mt-8"></div>
-                <!-- service buttons will be rendered inside #categoryList by renderCategoryList -->
             </td>
         </table>
-
-
-        <!-- Hidden original tables (kept for JS compatibility) -->
         <div class="legacy-panels hidden">
             <div class="grid">
                 <div class="panel">
@@ -121,7 +100,6 @@
                         <tbody id="waiting"></tbody>
                     </table>
                 </div>
-
                 <div class="panel">
                     <h3>目前叫號 / 服務中</h3>
                     <table class="table">
@@ -139,16 +117,10 @@
                 </div>
             </div>
         </div>
-
-
-
     </div>
-
     <div id="toaster" class="toaster"></div>
-
-    <!-- History modal -->
     <div id="historyModal" class="auth-overlay hidden">
-    <div class="auth-card w-640 maxh-70vh overflow-auto">
+        <div class="auth-card w-640 maxh-70vh overflow-auto">
             <h2>歷史叫號</h2>
             <div id="historyBody" class="muted">載入中…</div>
             <div class="actions mt-12 flex-end gap-8">
@@ -156,8 +128,6 @@
             </div>
         </div>
     </div>
-
-    <!-- Local overlay fallback login (kept for backward-compat) -->
     <div id="authOverlay" class="auth-overlay hidden">
         <div class="auth-card">
             <h2>櫃員登入</h2>
@@ -170,10 +140,9 @@
             </div>
         </div>
     </div>
-
     <script>
         const $ = (s) => document.querySelector(s);
-    const socket = io();
+        const socket = io();
         // 狀態中文對照
         const STATUS_LABEL = {
             waiting: '等候',
@@ -184,11 +153,9 @@
             cancelled: '已取消'
         };
         function statusLabel(s) { return STATUS_LABEL[s] || (s || '-'); }
-    let agentName = sessionStorage.getItem('ui_agent_name') || '';
-    let savedCounter = sessionStorage.getItem('ui_agent_counter') || '';
-
+        let agentName = sessionStorage.getItem('ui_agent_name') || '';
+        let savedCounter = sessionStorage.getItem('ui_agent_counter') || '';
         function updateAgentNameUI() { $('#agentNameDisplay').textContent = agentName || '—'; }
-
         function initializeCounterDisplay() {
             const savedCounter = sessionStorage.getItem('ui_agent_counter') || '';
             const counterEl = document.querySelector('#counter');
@@ -199,12 +166,10 @@
                 }
             }
         }
-
         if (savedCounter) { const c = document.querySelector('#counter'); if (c && !c.value) c.value = savedCounter; }
         if (agentName) document.querySelector('#authStatus').textContent = '已登入';
         updateAgentNameUI();
         initializeCounterDisplay();
-
         // overlay login
         function showOverlay() { document.querySelector('#authOverlay').classList.remove('hidden'); }
         function hideOverlay() { document.querySelector('#authOverlay').classList.add('hidden'); }
@@ -236,28 +201,23 @@
             } catch (err) {
                 console.warn('Logout API error:', err);
             }
-            
             // Clear UI-only sessionStorage keys (server session destroyed via API)
             sessionStorage.removeItem('ui_agent_name');
             sessionStorage.removeItem('ui_agent_account');
             sessionStorage.removeItem('ui_agent_counter');
             sessionStorage.removeItem('ui_agent_id');
             sessionStorage.removeItem('ui_agent_role');
-            
             document.querySelector('#authStatus').textContent = '';
             updateAgentNameUI();
-            
             // Clear counter display
             const counterEl = document.querySelector('#counter');
             if (counterEl) {
                 counterEl.value = '';
                 counterEl.placeholder = '未設定（請聯絡管理員）';
             }
-            
             // Redirect to login page
             window.location.href = '/login/index.html';
         };
-
         function toast(msg, type = 'info') {
             const el = document.createElement('div');
             el.className = `toast ${type}`;
@@ -266,7 +226,6 @@
             setTimeout(() => { el.classList.add('show'); }, 10);
             setTimeout(() => { el.classList.remove('show'); el.remove(); }, 3000);
         }
-
         // apiFetch wrapper: Now authentication is handled by server-side session cookies
         // We no longer need to send custom headers for authentication
         // CSRF token cache and fetch helper
@@ -285,15 +244,14 @@
                 return null;
             } catch (e) { console.warn('fetchCsrf err', e); return null; }
         }
-
         async function apiFetch(url, opts = {}) {
-            opts = Object.assign({ 
+            opts = Object.assign({
                 headers: {},
                 credentials: 'include' // Important: include cookies for session
             }, opts);
             // For state-changing requests, ensure we have a CSRF token
             const method = (opts.method || 'GET').toUpperCase();
-            if (!['GET','HEAD','OPTIONS'].includes(method)) {
+            if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
                 if (!opts.headers['x-csrf-token'] && !opts.headers['X-CSRF-Token']) {
                     // If token not present or older than 10 minutes, fetch a new one
                     if (!__cachedCsrf || (Date.now() - __cachedCsrfTs) > (14 * 60 * 1000)) {
@@ -304,7 +262,6 @@
                     }
                 }
             }
-
             let res = await fetch(url, opts);
             if (res.status === 401) {
                 toast('認證失敗，請重新登入', 'error');
@@ -317,7 +274,6 @@
             }
             return res;
         }
-
         function setSelectedInfo(ticket) {
             const el = document.querySelector('#selectedInfo');
             if (!el) return;
@@ -330,7 +286,6 @@
             el.appendChild(strong);
             el.appendChild(document.createTextNode(`，櫃台 ${String(ticket.counter || '-')}`));
         }
-
         function updateClock() {
             const now = new Date();
             const y = now.getFullYear();
@@ -343,7 +298,6 @@
             const clk = document.querySelector('#clock'); if (clk) clk.textContent = str;
         }
         setInterval(updateClock, 1000); updateClock();
-
         function renderCategoryList(summary) {
             // Keep the label mapping consistent with the service buttons in the UI
             const SERVICE_NAMES = {
@@ -384,7 +338,6 @@
                         refresh();
                     };
                 });
-
                 // initialize active row from #serviceType
                 const svc0 = document.querySelector('#serviceType')?.value;
                 if (svc0) {
@@ -394,7 +347,6 @@
                 }
             }
         }
-
         // pick button next to ticketId input: find matching ticket by visible number or internal id
         const pickBtn = document.querySelector('#pickFromInput');
         if (pickBtn) {
@@ -427,12 +379,10 @@
                 alert('找不到對應的叫號');
             });
         }
-
         async function refresh() {
             const res = await apiFetch('/api/overview');
             const data = await res.json();
             const serviceType = document.querySelector('#serviceType').value;
-
             // update waiting table (legacy)
             const waitingRes = await apiFetch(`/api/tickets/waiting?serviceType=${serviceType}`);
             const waitingData = await waitingRes.json();
@@ -456,7 +406,6 @@
                     });
                 }
             }
-
             const currentTbody = document.querySelector('#current');
             if (currentTbody) {
                 currentTbody.innerHTML = '';
@@ -480,17 +429,14 @@
                     });
                 }
             }
-
             document.querySelectorAll('[data-id]').forEach(tr => {
                 tr.onclick = () => {
                     const id = tr.getAttribute('data-id');
                     const num = tr.getAttribute('data-number') || '';
                     const vis = document.querySelector('#ticketId'); if (vis) vis.value = num || '';
                     const hid = document.querySelector('#ticketInternalId'); if (hid) hid.value = id || '';
-                    
                     // Immediately update selected info with available data
                     let ticketInfo = { number: num, id: id };
-                    
                     // waiting ticket
                     if (tr.hasAttribute('data-waiting-id')) {
                         const waitingTicket = waitingData.tickets?.find(t => t.id === Number(id));
@@ -504,7 +450,6 @@
                             ticketInfo = { ...ticketInfo, counter: currentCall.counter, serviceType: currentCall.serviceType };
                         }
                     }
-                    
                     setSelectedInfo(ticketInfo);
                 };
             });
@@ -516,18 +461,15 @@
                     const num = row ? (row.getAttribute('data-number') || '') : '';
                     const vis = document.querySelector('#ticketId'); if (vis) vis.value = num || '';
                     const hid = document.querySelector('#ticketInternalId'); if (hid) hid.value = id || '';
-                    
                     // Get detailed info and update selected info
                     let ticketInfo = { number: num, id: id };
                     const currentCall = (data.currentCalls || []).find(c => c.id === Number(id));
                     if (currentCall) {
                         ticketInfo = { ...ticketInfo, counter: currentCall.counter, serviceType: currentCall.serviceType };
                     }
-                    
                     setSelectedInfo(ticketInfo);
                 };
             });
-
             // selection: prefer hidden internal id (numeric). If missing, fallback to visible ticket number match.
             const hidVal = document.querySelector('#ticketInternalId')?.value;
             const selId = hidVal ? Number(hidVal) : null;
@@ -535,7 +477,6 @@
             let cur = null;
             if (selId) { cur = (data.currentCalls || []).find(x => x.id === selId); }
             if (!cur && visNum) { cur = (data.currentCalls || []).find(x => String(x.number) === String(visNum)); }
-
             // If still no selection, auto-select current call for this counter (if any).
             if (!cur) {
                 const myCounter = sessionStorage.getItem('ui_agent_counter') || document.querySelector('#counter')?.value || '';
@@ -543,9 +484,7 @@
                     cur = (data.currentCalls || []).find(c => String(c.counter) === String(myCounter));
                 }
             }
-
             setSelectedInfo(cur || null);
-
             // Stats: local (selected service waiting), total (sum waiting)
             const summary = data.summary || [];
             const sumMap = summary.reduce((acc, s) => { acc[s.serviceType] = s.waiting || 0; return acc; }, {});
@@ -553,7 +492,6 @@
             const total = summary.reduce((n, s) => n + (s.waiting || 0), 0);
             const lw = document.querySelector('#localWaitCount'); if (lw) lw.textContent = local;
             const tw = document.querySelector('#totalWaitCount'); if (tw) tw.textContent = total;
-
             // Info fields
             const firstWaiting = waitingData.tickets?.[0];
             const waitField = document.querySelector('#waitTimeField');
@@ -582,10 +520,8 @@
                     serviceTimeField.value = `${mins} 分鐘`;
                 } else { serviceTimeField.value = '—'; }
             }
-
             renderCategoryList(summary);
         }
-
         // Existing handlers (mostly unchanged)
         $('#callNext').onclick = async () => {
             const serviceType = $('#serviceType').value;
@@ -609,7 +545,6 @@
             }
             await refresh();
         };
-
         socket.on('queue:update', refresh);
         socket.on('call:made', refresh);
         // Join rooms for targeted messaging once connected
@@ -620,7 +555,6 @@
                 if (agentName) socket.emit('join', `agent:${agentName}`);
             } catch (e) { /* noop */ }
         });
-
         // 接收密傳訊息廣播：其他櫃員或系統訊息
         socket.on('agent:message', (payload) => {
             try {
@@ -637,7 +571,6 @@
             } catch (e) { /* noop */ }
         });
         refresh();
-
         $('#markServing').onclick = async () => {
             const id = $('#ticketInternalId').value;
             if (!id) { alert('請選取一筆叫號'); return; }
@@ -673,13 +606,13 @@
                 body: JSON.stringify({ ticketId: Number(id), reason })
             });
             const data = await res.json();
-            if (data.error) { 
-                toast(data.error, 'error'); 
-            } else { 
-                toast(`已取消 ${data.ticket.number}`, 'success'); 
-                document.querySelector('#ticketId').value = ''; 
-                document.querySelector('#ticketInternalId').value = ''; 
-                setSelectedInfo(null); 
+            if (data.error) {
+                toast(data.error, 'error');
+            } else {
+                toast(`已取消 ${data.ticket.number}`, 'success');
+                document.querySelector('#ticketId').value = '';
+                document.querySelector('#ticketInternalId').value = '';
+                setSelectedInfo(null);
             }
             await refresh();
         };
@@ -800,30 +733,30 @@
         };
         document.querySelector('#historyClose').onclick = () => document.querySelector('#historyModal').classList.add('hidden');
         $('#message').onclick = async () => {
-                const text = prompt('輸入要傳送的訊息');
+            const text = prompt('輸入要傳送的訊息');
             if (!text) return;
-                const targetType = prompt('指定傳送對象類型：輸入 C 表示櫃台，A 表示人員，留空表示廣播');
-                let toCounter = null;
-                let toAgent = null;
-                if (targetType && (targetType === 'C' || targetType === 'c')) {
-                    const ctr = prompt('輸入目標櫃台號（例如：1 或 A1）');
-                    if (!ctr) { alert('未輸入櫃台，取消'); return; }
-                    toCounter = ctr;
-                } else if (targetType && (targetType === 'A' || targetType === 'a')) {
-                    const ag = prompt('輸入目標服務人員姓名（完全匹配）');
-                    if (!ag) { alert('未輸入姓名，取消'); return; }
-                    toAgent = ag;
-                }
-                const body = { text, from: agentName || 'agent' };
-                if (toCounter) body.toCounter = toCounter;
-                if (toAgent) body.toAgent = toAgent;
-                const res = await apiFetch('/api/agent/message', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body)
-                });
-                const data = await res.json();
-                if (!res.ok || data.error) { alert(data.error || '傳送失敗'); return; }
-                toast('已送出訊息', 'success');
+            const targetType = prompt('指定傳送對象類型：輸入 C 表示櫃台，A 表示人員，留空表示廣播');
+            let toCounter = null;
+            let toAgent = null;
+            if (targetType && (targetType === 'C' || targetType === 'c')) {
+                const ctr = prompt('輸入目標櫃台號（例如：1 或 A1）');
+                if (!ctr) { alert('未輸入櫃台，取消'); return; }
+                toCounter = ctr;
+            } else if (targetType && (targetType === 'A' || targetType === 'a')) {
+                const ag = prompt('輸入目標服務人員姓名（完全匹配）');
+                if (!ag) { alert('未輸入姓名，取消'); return; }
+                toAgent = ag;
+            }
+            const body = { text, from: agentName || 'agent' };
+            if (toCounter) body.toCounter = toCounter;
+            if (toAgent) body.toAgent = toAgent;
+            const res = await apiFetch('/api/agent/message', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const data = await res.json();
+            if (!res.ok || data.error) { alert(data.error || '傳送失敗'); return; }
+            toast('已送出訊息', 'success');
         };
         window.addEventListener('keydown', (e) => {
             if (e.target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
@@ -832,9 +765,10 @@
             if (e.key === 'f' || e.key === 'F') { e.preventDefault(); document.querySelector('#finish').click(); }
             if (e.key === 'x' || e.key === 'X') { e.preventDefault(); document.querySelector('#cancel').click(); }
         });
-    const openSecondEl = document.querySelector('#openSecondScreen');
-    if (openSecondEl) openSecondEl.onclick = () => { window.open('/lobby/index.html', '_blank'); };
+        const openSecondEl = document.querySelector('#openSecondScreen');
+        if (openSecondEl) openSecondEl.onclick = () => { window.open('/lobby/index.html', '_blank'); };
         const counterEl = document.querySelector('#counter');
     </script>
 </body>
+
 </html>

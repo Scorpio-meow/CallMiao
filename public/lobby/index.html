@@ -16,7 +16,6 @@
     <footer>請留意大螢幕與手機通知</footer>
   </div>
   <button id="enableSoundBtn" class="enable-sound">啟用聲音</button>
-
   <script>
     const socket = io();
     let audioEnabled = false;
@@ -42,7 +41,6 @@
         speechSynthesis.speak(u);
       } catch (e) { console.error('speak error', e); }
     }
-
     // Voice selection and speak multiple parts in sequence.
     // Format number to improve clarity & perceived loudness (read char-by-char)
     function formatNumberForSpeak(s) {
@@ -68,8 +66,7 @@
       chooseVoice();
       speechSynthesis.onvoiceschanged = chooseVoice;
     }
-
-  // Speak multiple parts. Each part may be a string or an object { text, volume, rate, pitch }
+    // Speak multiple parts. Each part may be a string or an object { text, volume, rate, pitch }
     function speakParts(parts) {
       try {
         if (!('speechSynthesis' in window)) return;
@@ -96,7 +93,6 @@
         next();
       } catch (err) { console.error('speakParts error', err); }
     }
-
     function enableAudio() {
       // Called by a user gesture to unlock audio autoplay policy in browsers
       try {
@@ -150,11 +146,9 @@
           { text: numSpaced, volume: 1.0, rate: 0.98, pitch: 0.98, pauseAfter: 240 },
           { text: `到 ${counter} 號櫃台`, volume: 0.98, rate: 0.96, pitch: 1.0, pauseAfter: 140 }
         ]);
-
       }
     });
     render();
-
     // attach enable button
     document.addEventListener('DOMContentLoaded', () => {
       const btn = document.getElementById('enableSoundBtn');
