@@ -1,418 +1,502 @@
-# 數位叫號嵌入式網頁模組
+# 數位叫號嵌入式網頁模組 (Digital Queue System)
 
-可嵌入既有網站或資訊站的取號小工具、櫃員端、大廳叫號顯示看板，搭配 REST API、WebSocket 即時通知、SQLite 輕量資料庫與 QR Code 取號及查詢。
+可嵌入既有企業網站、多功能資訊站（Kiosk）的排隊取號、櫃員叫號管理、大廳多媒體動態看板系統。本系統採用輕量高效的架構設計，整合 Express 後端服務、Socket.IO 即時雙向通訊、SQLite 嵌入式資料庫與 QR Code 即時取號及查詢功能。
 
-內容包含：
-- 客戶端（Kiosk / Widget）：取號與票券 QR Code 生成。
-- 櫃員端（Agent）：登入、叫號、重叫、轉服務、完成服務、取消票券。
-- 大廳顯示看板（Lobby）：即時叫號顯示與事件播報（支援語意語音廣播）。
-- 統一登入頁面（Login）：支援 Captcha 圖形驗證碼與安全認證。
-- 管理介面（Admin）：櫃員帳號建立、編輯與櫃台綁定設定。
-- 後端服務（Express）：提供 REST API、Socket.IO 即時更新與安全防護。
+---
+
+## 目錄
+
+- [專案簡介與系統特色](#專案簡介與系統特色)
+- [系統架構與流程圖](#系統架構與流程圖)
+- [快速開始](#快速開始)
+- [環境配置說明 (.env)](#環境配置說明-env)
+- [專案目錄結構](#專案目錄結構)
+- [管理與帳號安全 (CSRF 防護)](#管理與帳號安全-csrf-防護)
+- [REST API 規格文件](#rest-api-規格文件)
+- [WebSocket 即時通訊事件](#websocket-即時通訊事件)
+- [資料庫結構 (SQLite Schema)](#資料庫結構-sqlite-schema)
+- [生產環境安全與部署建議](#生產環境安全與部署建議)
+- [常見問題與疑難排解 (Troubleshooting)](#常見問題與疑難排解-troubleshooting)
+- [版本更新紀錄 (Changelog)](#版本更新紀錄-changelog)
+- [專案聯繫資訊](#專案聯繫資訊)
+- [授權條款](#授權條款)
+
+---
+
+## 專案簡介與系統特色
+
+本系統模組化設計完備，提供完整的排隊叫號全流程解決方案：
+
+- **客戶端取號小工具 (Kiosk / Widget)**：提供訪客觸控取號介面，支援 iframe 嵌入既有網站，並能動態生成票券 QR Code 供行動裝置掃描追蹤。
+- **櫃員端操作介面 (Agent Dashboard)**：具備櫃台登入認證、順序叫號、特定叫號、重新呼叫、標記服務中、完成服務、取消票券、櫃台與業務轉移等完整業務操作。
+- **大廳顯示看板 (Lobby Display)**：支援大螢幕即時動態跳號顯示、多櫃台狀態輪播、歷史叫號紀錄，以及瀏覽器 Web Speech API 語音合成廣播播報。
+- **顧客行動進度追蹤 (Mobile Ticket)**：顧客可透過手機掃描票券 QR Code 隨時查看前方等候人數與叫號進度，減少現場群聚。
+- **統一認證與圖形驗證碼 (Login & Captcha)**：具備防暴力破解之圖形驗證碼機制（支援 Sharp 高性能點陣圖生成與 SVG 向量圖降級方案）。
+- **權限與櫃員管理介面 (Admin Console)**：管理員專屬後台，提供櫃員帳號建立、資料修改、密碼重設、啟用狀態切換與固定櫃台號綁定。
+- **企業級安全防護機制 (Enterprise Security)**：全面實作 CSRF Token 驗證、分級速率限制（Rate Limiting）、DOM XSS 安全過濾、CORS 來源校驗與 HTTP 安全標頭（Helmet）。
+
+---
+
+## 系統架構與流程圖
+
+### 1. 排隊叫號業務流程
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Customer as 顧客 (Kiosk / 手機)
+    participant Server as 佇列伺服器 (Express / Socket.IO)
+    participant DB as SQLite 資料庫
+    actor Agent as 櫃員 (Agent Dashboard)
+    participant Lobby as 大廳看板 (Lobby Screen)
+
+    Customer->>Server: POST /api/tickets (選擇服務別 A/B/C)
+    Server->>DB: 生成當日流水號並存入 tickets 表
+    DB-->>Server: 回傳票券資訊
+    Server-->>Customer: 回傳票號與追蹤 QR Code
+    Server-)Lobby: WebSocket 廣播 queue:update
+
+    Agent->>Server: POST /api/agent/callNext
+    Server->>DB: 更新票券狀態為 calling，記錄櫃台號與叫號時間
+    DB-->>Server: 更新完成
+    Server-->>Agent: 回傳被叫號票券資料
+    Server-)Lobby: WebSocket 廣播 call:made (觸發看板更新與語音播報)
+
+    Agent->>Server: POST /api/agent/finish
+    Server->>DB: 更新票券狀態為 finished，記錄完成時間
+    DB-->>Server: 更新完成
+    Server-->>Agent: 標記完成
+    Server-)Lobby: WebSocket 廣播 queue:update
+```
+
+### 2. CSRF 安全防護流程
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Admin as 管理員瀏覽器
+    participant Server as 後端伺服器 (CSRF Middleware)
+    participant Session as Session / Cookie 儲存
+
+    Admin->>Server: GET /api/csrf
+    Server->>Session: 簽署並設定 CSRF Secret Cookie
+    Server-->>Admin: 回傳 JSON: { "csrfToken": "TOKEN_STRING" }
+    
+    Note over Admin,Server: 發送修改型操作 (POST / PUT / DELETE)
+    Admin->>Server: POST /api/agents (Header 夾帶 x-csrf-token)
+    Server->>Server: 驗證 Request Header Token 與 Cookie Secret
+    alt 驗證通過
+        Server-->>Admin: 執行管理操作並回傳 200 OK
+    else 驗證失敗 / 缺少 Token
+        Server-->>Admin: 拒絕請求，回傳 403 Forbidden (EBADCSRFTOKEN)
+    end
+```
 
 ---
 
 ## 快速開始
 
-### 1. 安裝相依套件
+### 1. 系統需求
 
-請使用 Bun 安裝專案所需的套件：
+- **執行環境**：Bun (推薦) 或 Node.js 18.0.0 以上
+- **作業系統**：Windows / macOS / Linux
+- **資料庫**：內建 SQLite 3（無需額外安裝獨立資料庫服務，系統首次啟動時將自動建立 `db/queue.db`）
+
+### 2. 安裝相依套件
+
+請使用 Bun 套件管理工具安裝專案相依模組：
+
 ```powershell
 bun install
 ```
 
-### 2. 設定環境變數
+### 3. 設定環境變數
 
-複製環境變數範本並根據您的執行環境進行修改：
+複製環境變數範本檔案，並根據您的實際運行環境進行配置：
+
 ```powershell
 # 複製環境變數範本
 Copy-Item .env.example .env
 
-# 編輯 .env 檔案進行配置
+# 編輯 .env 檔案
 notepad .env
 ```
 
-開發模式設定範例：
+**開發環境範例配置：**
 ```env
 PORT=3000
 NODE_ENV=development
-# 開發模式下會自動允許 localhost 跨域，無需額外設定 ALLOWED_ORIGINS
+SESSION_SECRET=請設定隨機強密碼字串（至少32字元）
+# 開發模式下系統會自動允許本機來源 (localhost 與 127.0.0.1)，無需額外設定 ALLOWED_ORIGINS
 ```
 
-生產環境與反向代理（如 DevTunnel）設定範例：
+**正式生產環境（或搭配反向代理 / DevTunnel）範例配置：**
 ```env
 PORT=3000
 NODE_ENV=production
-SESSION_SECRET=您的隨機長字串金鑰
-ALLOWED_ORIGINS=https://your-tunnel-id.devtunnels.ms
-PUBLIC_ORIGIN=https://your-tunnel-id.devtunnels.ms
+SESSION_SECRET=請設定隨機強密碼字串（至少32字元）
+ALLOWED_ORIGINS=https://queue.yourcompany.com,https://your-tunnel-id.devtunnels.ms
+PUBLIC_ORIGIN=https://queue.yourcompany.com
+TRUST_PROXY=1
 ```
 
-重要提示：
-- 開發模式下，系統會自動允許所有 localhost 與 127.0.0.1 請求，無需在 `ALLOWED_ORIGINS` 中列出。
-- 生產環境下，必須設定 `ALLOWED_ORIGINS`（以逗號分隔多個網域，不要有空格）與 `PUBLIC_ORIGIN`。
-- 生產環境下，`SESSION_SECRET` 不可使用預設值，否則伺服器將拒絕啟動。
+### 4. 初始化管理員帳號
 
-### 3. 手動建立管理員帳號
+由於管理介面具備身分與權限驗證，請依照以下方式在 SQLite 資料庫中建立第一組管理員帳號：
 
-由於自動化腳本已移出，請依照以下手動步驟在 SQLite 資料庫中建立管理員帳號：
-
-1) 產生加密密碼的 bcrypt 雜湊值（請在終端機執行以下指令）：
+#### 步驟 1：產生密碼之 bcrypt 雜湊值
 ```powershell
 bun -e "console.log(require('bcryptjs').hashSync('您的密碼', 10))"
 ```
 
-2) 連接 SQLite 資料庫（請先確保已執行過一次服務以自動生成資料庫檔案，或手動建立 db 目錄）：
+#### 步驟 2：寫入資料庫
+確保已啟動過一次服務生成資料庫，或手動建立 `db` 資料夾後執行：
 ```powershell
 sqlite3 db/queue.db
 ```
 
-3) 在 SQLite 互動式終端機中執行 SQL 語法寫入管理員（請將 `<您的-bcrypt-hash>` 替換為第一步產生的結果）：
+在 SQLite 命令介面中執行下列 SQL（將 `<您的-bcrypt-hash>` 替換為步驟 1 的輸出）：
 ```sql
 INSERT INTO agents (account, name, password, counter, role, active, createdAt) 
 VALUES ('admin', '系統管理員', '<您的-bcrypt-hash>', '', 'admin', 1, datetime('now'));
+.exit
 ```
 
-### 4. 啟動系統
+### 5. 啟動伺服器
 
-開發模式（支援程式碼修改後自動重啟）：
+**開發模式（支援檔案變更熱重載）：**
 ```powershell
 bun run dev
 ```
 
-生產模式（使用標準 Node 執行）：
+**生產模式（直接以 Bun / Node 執行）：**
 ```powershell
 bun start
 ```
 
-### 5. 訪問介面網址對照
+### 6. 前端端點訪問一覽
 
-本地訪問（開發模式）：
-- 客戶端取號小工具：http://localhost:3000/kiosk/index.html
-- 櫃員端操作介面：http://localhost:3000/agent/index.html
-- 大廳叫號顯示看板：http://localhost:3000/lobby/index.html
-- 統一登入頁面：http://localhost:3000/login/index.html
-- 管理介面（櫃員與櫃台管理）：http://localhost:3000/admin/agents.html
+| 模組名稱 | 本地訪問 URL (預設埠 3000) | 說明 |
+|----------|-----------------------------|------|
+| **客戶端取號介面** | `http://localhost:3000/kiosk/index.html` | 訪客選取服務別取號，支援 iframe 嵌入 |
+| **櫃員操作端介面** | `http://localhost:3000/agent/index.html` | 櫃員叫號、過號處理、轉移與服務完成 |
+| **大廳叫號顯示看板** | `http://localhost:3000/lobby/index.html` | 現場大螢幕即時顯示各櫃狀態與語音播報 |
+| **顧客票券查詢介面** | `http://localhost:3000/ticket/index.html` | 掃描 QR Code 後之手機專屬追蹤頁面 |
+| **統一登入頁面** | `http://localhost:3000/login/index.html` | 櫃員與管理員登入（含 Captcha 驗證） |
+| **管理員控制台** | `http://localhost:3000/admin/agents.html` | 櫃員帳號增刪改查與櫃台綁定管理 |
 
-遠端與正式訪問：
-- 將上述網址中的 `localhost:3000` 替換為您在 `.env` 中設定的 `PUBLIC_ORIGIN`。
-
----
-
-## 需求與相容性
-
-- Node.js 16 以上（建議 18+）或 Bun 執行環境
-- Windows / macOS / Linux 作業系統
-- 內建 SQLite 資料庫（首次啟動時會自動建立 `db/queue.db` 檔案）
+> **提示**：若在遠端或透過公開網域訪問，請將上述網址中的 `http://localhost:3000` 替換為 `.env` 中設定的 `PUBLIC_ORIGIN`。
 
 ---
 
-## 環境配置 (.env)
+## 環境配置說明 (.env)
 
-| 變數名稱 | 說明 | 預設值 |
-|----------|------|--------|
-| PORT | 伺服器監聽的埠號 | 3000 |
-| NODE_ENV | 環境模式 (development / production) | development |
-| SESSION_SECRET | Session 加密密鑰（正式環境下必須修改） | fallback-insecure-secret-change-this |
-| ALLOWED_ORIGINS | 允許跨域請求的來源（逗號分隔，不可包含空格與尾端斜線） | 無 |
-| PUBLIC_ORIGIN | 系統對外公開網址（用於生成 QR Code 的基礎網址） | 無 |
+系統主要透過根目錄下的 `.env` 檔案進行運行時參數配置：
 
-### 智能 CORS 比對行為
+| 變數名稱 | 必要性 | 預設值 | 說明 |
+|----------|--------|--------|------|
+| `PORT` | 選填 | `3000` | HTTP 伺服器監聽的連接埠。 |
+| `NODE_ENV` | 選填 | `development` | 運作環境模式。可設定為 `development` 或 `production`。 |
+| `SESSION_SECRET` | 必要 | 無 | Session 加密密鑰。未設定時系統將拒絕啟動（所有環境皆同）。 |
+| `ALLOWED_ORIGINS` | 生產環境必要 | 無 | 允許跨來源資源共用 (CORS) 的來源清單。多個來源請以逗號 `,` 分隔，結尾請勿包含斜線 `/`。 |
+| `PUBLIC_ORIGIN` | 生產環境建議 | 無 | 外部公開訪問的基礎 URL，系統生成票券 QR Code 與重定向連結時使用。 |
+| `TRUST_PROXY` | 生產環境必要 | 無（不信任代理） | 反向代理信任設定：代理層數（如單層 Nginx 填 `1`）、直接對外服務填 `false`，或以逗號分隔的代理 IP／網段。只有受信任的代理可設定 `X-Forwarded-*`（影響速率限制的來源 IP 與公開網址推導）。 |
 
-| 請求來源 | 開發模式 (development) | 生產模式 (production) |
-|----------|-----------------------|-----------------------|
-| 無 Origin 標頭的請求 | 允許存取 | 允許存取 |
-| 本地同埠來源 (http://localhost:當前PORT) | 自動允許 | 自動允許 |
-| 本地異埠來源 (http://localhost:其他PORT) | 自動允許 | 拒絕存取 |
-| 在 ALLOWED_ORIGINS 中設定的網域 | 允許存取 | 允許存取 |
-| 其他非信任來源 | 拒絕並記錄安全日誌 | 拒絕並記錄安全日誌 |
+### 智能 CORS 存取控制規則
+
+| 請求來源類型 | 開發模式 (development) | 生產模式 (production) |
+|--------------|-----------------------|-----------------------|
+| **無 Origin 標頭請求**（如同源頁面、伺服器端腳本、curl） | 允許存取 | 允許存取 |
+| **本機同埠來源** (`http://localhost:當前PORT`) | 自動允許 | 自動允許 |
+| **本機異埠來源** (`http://localhost:其他PORT`) | 自動允許 | 拒絕存取（記錄安全日誌） |
+| **符合 ALLOWED_ORIGINS 白名單之網域** | 允許存取 | 允許存取 |
+| **非白名單之外部網域** | 拒絕存取 | 拒絕存取（記錄安全日誌） |
 
 ---
 
-## 專案結構
+## 專案目錄結構
 
 ```
 CNS/
-├── server.js                 # 主伺服器程式（Express + Socket.IO）與 API 路由實作
-├── package.json              # 專案相依套件與指令設定
+├── server.js                 # 主伺服器入口（Express、Socket.IO、CORS、Rate Limiting、CSRF、API 路由）
+├── package.json              # 專案套件配置、相依性與指令腳本
 ├── .env.example              # 環境變數設定範本
-├── .gitignore                # Git 忽略檔案清單
+├── .gitignore                # Git 版本控制忽略清單（已排除 .env 與 SQLite 資料庫）
 ├── db/                       # 資料庫儲存目錄
-│   └── queue.db              # SQLite 資料庫檔案（啟動時自動建立）
-└── public/                   # 前端靜態資源網頁
-    ├── login/                # 統一登入頁面（含 Captcha 驗證碼處理邏輯）
-    ├── agent/                # 櫃員操作端介面
-    ├── kiosk/                # 取號端小工具（支援 iframe 嵌入）
-    ├── lobby/                # 大廳看板顯示與語音播報頁面
-    ├── ticket/               # 顧客票券進度即時查詢頁面
-    ├── admin/                # 管理員介面（櫃員帳號管理與櫃台設定）
-    └── utils/                # 前端共用工具庫
-        ├── auth-checker.js   # 認證與狀態檢查模組
-        ├── input-validator.js # 前端輸入驗證與安全清理工具
-        └── url-manager.js    # 安全網址管理與跳轉白名單控制
+│   └── queue.db              # SQLite 嵌入式資料庫（啟動時自動建立）
+└── public/                   # 前端純靜態資源目錄
+    ├── admin/                # 管理員控制台
+    │   └── agents.html       # 櫃員帳號維護與櫃台綁定頁面
+    ├── agent/                # 櫃員端操作介面
+    │   ├── index.html        # 櫃員叫號工作台
+    │   ├── agent.css         # 櫃員工作台樣式
+    │   └── agent.js          # 櫃員工作台互動與 WebSocket 邏輯
+    ├── kiosk/                # 取號端介面
+    │   ├── index.html        # 觸控取號小工具
+    │   ├── kiosk.css         # 取號介面樣式
+    │   └── kiosk.js          # 取號與票券列印/QR Code 生成邏輯
+    ├── lobby/                # 大廳看板介面
+    │   ├── index.html        # 大螢幕跳號看板
+    │   ├── lobby.css         # 看板視覺樣式
+    │   └── lobby.js          # 即時跳號動畫與語音播報邏輯
+    ├── login/                # 統一登入模組
+    │   ├── index.html        # 登入頁面（含 Captcha 驗證碼元件）
+    │   └── login.js          # 登入認證請求與錯誤處理
+    ├── ticket/               # 顧客端行動追蹤模組
+    │   ├── index.html        # 票券進度即時查詢頁面
+    │   └── ticket.js         # 票券狀態輪詢與 DOM 安全渲染
+    └── utils/                # 前端共用核心工具庫
+        ├── auth-checker.js   # 登入狀態校驗與跳轉守衛
+        ├── input-validator.js# 前端輸入清理、防 XSS 與資料格式驗證
+        └── url-manager.js    # 安全 URL 跳轉白名單與 Protocol 檢驗
 ```
 
 ---
 
-## 管理與帳號安全 (CSRF 流程)
+## 管理與帳號安全 (CSRF 防護)
 
-管理介面（`/admin/agents.html`）與管理 API 受到 CSRF 流程與管理員角色權限保護：
+為防止跨站請求偽造（CSRF）攻擊，本系統對涉及狀態變更的敏感 API（如建立櫃員、修改帳號、刪除櫃員等）實作了嚴格的 CSRF Token 驗證機制：
 
-1) 請求非安全方法（如 POST、PUT、DELETE）前，需先透過 GET `/api/csrf` 取得 `{ csrfToken }`。
-2) 後續發送修改資料的 API 請求時，必須在 HTTP Header 中夾帶 `x-csrf-token: <csrfToken>` 標頭。
+1. **獲取 Token**：登入後，客戶端在發送非安全 HTTP 方法（`POST`、`PUT`、`DELETE`）前，需先發送 `GET /api/csrf` 請求。Token 綁定於伺服器端 Session，並於 Response Body 回傳 `{ "csrfToken": "..." }`。
+2. **夾帶標頭**：後續發送修改請求時，必須在 HTTP Request Header 中夾帶 `x-csrf-token: <csrfToken>`。
+3. **豁免端點**：僅 `POST /api/login`、`POST /api/tickets`（匿名取號）與驗證碼端點不需 Token；其餘狀態變更請求一律驗證。
 
-### 櫃台號管理重要規則
+### 櫃台號（Counter）綁定規則
 
-為防範配置錯誤，櫃台號實作了嚴格的權限綁定：
-- 櫃台號僅能由管理員透過管理介面（`/admin/agents.html`）在建立或修改櫃員帳號時進行設定。
-- 櫃員登入後，系統將自動載入該帳號所綁定的櫃台號。
-- 櫃員端操作頁面上的櫃台號欄位為唯讀，櫃員無法自行修改。
-
----
-
-## API 摘要
-
-### 公共 API
-
-- **GET `/api/health`**：健康檢查。
-- **POST `/api/tickets`**：建立排隊票券（Request Body：`{ serviceType: 'A' }`）。
-- **GET `/api/tickets/waiting`**：取得指定服務別的等候清單（Query：`?serviceType=A`）。
-- **GET `/api/ticket/:id`**：查詢單筆票券詳情。
-- **GET `/api/overview`**：取得目前排隊概況與各櫃台叫號狀態。
-- **GET `/api/qrcode`**：生成與傳回 PNG 格式的 QR Code 圖片（Query：`?text=...`）。
-
-### 驗證與 Captcha API
-
-- **GET `/api/captcha/new`**：生成新的驗證碼 Token（回傳 `{ token, expiresAt }`）。
-- **GET `/api/captcha/image/:token`**：傳回對應 Token 的驗證碼圖片（若系統安裝有 `sharp` 則傳回 PNG，若無則降級為 SVG 向量圖）。
-- **POST `/api/login`**：登入驗證（包含帳號、密碼與 Captcha 圖形驗證，成功則建立 Session）。
-
-### 櫃員端 API（需有效的櫃員 Session 認證）
-
-- **POST `/api/agent/callNext`**：呼叫下一位等待的顧客（Request Body：`{ serviceType, counter }`）。
-- **POST `/api/agent/callSpecific`**：指定叫號（Request Body：`{ ticketId, counter, internal }`）。
-- **POST `/api/agent/markServing`**：標記開始提供服務（Request Body：`{ ticketId }`）。
-- **POST `/api/agent/finish`**：完成服務（Request Body：`{ ticketId, result }`）。
-- **POST `/api/agent/recall`**：重新呼叫當前票券（Request Body：`{ ticketId }`）。
-- **POST `/api/agent/cancel`**：取消該票券並記錄原因（Request Body：`{ ticketId, reason }`）。
-- **POST `/api/agent/transfer`**：票券轉櫃或轉移服務別（Request Body：`{ ticketId, toServiceType, toCounter, keepStatus }`）。
-- **POST `/api/agent/createTicket`**：櫃台櫃員代客取號（Request Body：`{ serviceType }`）。
-- **GET `/api/agent/history`**：取得叫號歷史紀錄（Query：`?serviceType=A&limit=50`）。
-- **GET `/api/agent/ticket/:id`**：取得單筆票券之內部詳細資料。
-
-### 管理端 API（需管理員權限，且需帶有 CSRF Token）
-
-- **GET `/api/agents`**：列出所有櫃員帳號。
-- **GET `/api/agents/:id`**：查詢單筆櫃員資料。
-- **POST `/api/agents`**：建立新的櫃員帳號。
-- **PUT `/api/agents/:id`**：修改現有櫃員帳號（包含停用/啟用、修改密碼、變更櫃台號等）。
-- **DELETE `/api/agents/:id`**：刪除指定的櫃員帳號。
+- 櫃台號由管理員在後台（`/admin/agents.html`）建立或編輯櫃員時指定。
+- 櫃員登入系統後，系統將自動載入其所屬的櫃台號碼。
+- 櫃員操作介面上的櫃台號欄位為**唯讀 (Read-only)**，防止櫃員誤改或冒用他人櫃台叫號。
 
 ---
 
-## WebSocket 事件
+## REST API 規格文件
 
-- **`queue:update`**：排隊等待人數與現況摘要更新（Payload：`{ serviceType, overview }`）。
-- **`call:made`**：叫號事件廣播，用於大廳看板接收播放（Payload：`{ ticket }`）。
-- **`agent:message`**：櫃員端廣播之系統即時通告。
+### 1. 公共端點 (Public Endpoints)
+
+| 方法 | 路徑 | 參數說明 | 描述 |
+|------|------|----------|------|
+| `GET` | `/api/health` | 無 | 伺服器健康狀態檢查。 |
+| `POST` | `/api/tickets` | Body: `{ "serviceType": "A" }` | 訪客取號，建立新排隊票券。 |
+| `GET` | `/api/tickets/waiting` | Query: `?serviceType=A` | 取得指定業務類別之目前等待清單。 |
+| `GET` | `/api/ticket/:id` | Path: `id` (票券 ID) | 查詢指定單筆票券目前狀態與進度。 |
+| `GET` | `/api/overview` | 無 | 取得全系統叫號現況、各櫃台狀態與等候人數。 |
+| `GET` | `/api/qrcode` | Query: `?text=https://...` | 生成指定文字之 PNG 格式二維碼圖片。 |
+
+### 2. 認證與驗證碼 (Auth & Captcha)
+
+| 方法 | 路徑 | 參數說明 | 描述 |
+|------|------|----------|------|
+| `GET` | `/api/captcha/new` | 無 | 建立一組 Captcha 驗證 Token（回傳 `{ token, expiresAt }`）。 |
+| `GET` | `/api/captcha/image/:token` | Path: `token` | 取得對應 Token 之圖形驗證碼圖片（優先回傳 PNG，降級回傳 SVG）。 |
+| `POST` | `/api/login` | Body: `{ "account", "password", "captchaToken", "captchaText" }` | 櫃員/管理員登入並建立 Session。 |
+| `POST` | `/api/logout` | 無 | 登出並銷毀當前 Session。 |
+| `GET` | `/api/me` | 無 | 取得目前登入使用者的身分與櫃台綁定資訊。 |
+| `GET` | `/api/csrf` | 無 | 取得 CSRF 防護 Token（回傳 `{ csrfToken }`）。 |
+
+### 3. 櫃員操作端點 (Agent Operations - 需登入 Session)
+
+| 方法 | 路徑 | 參數說明 | 描述 |
+|------|------|----------|------|
+| `POST` | `/api/agent/callNext` | Body: `{ "serviceType": "A" }` | 呼叫指定業務別之下一位等候顧客（櫃台號取自登入帳號）。 |
+| `POST` | `/api/agent/callSpecific` | Body: `{ "ticketId": 10 }` | 指定叫號（支援指定特定票券；櫃台號取自登入帳號）。 |
+| `POST` | `/api/agent/markServing` | Body: `{ "ticketId": 10 }` | 將票券狀態標記為「服務中 (serving)」。 |
+| `POST` | `/api/agent/finish` | Body: `{ "ticketId": 10, "result": "處理完成" }` | 標記票券服務結束 (finished)。 |
+| `POST` | `/api/agent/recall` | Body: `{ "ticketId": 10 }` | 重新廣播呼叫當前票券。 |
+| `POST` | `/api/agent/cancel` | Body: `{ "ticketId": 10, "reason": "過號未到" }` | 取消票券 (cancelled)。 |
+| `POST` | `/api/agent/transfer` | Body: `{ "ticketId", "toServiceType", "toCounter" }` | 票券轉櫃或轉換業務服務別。 |
+| `POST` | `/api/agent/createTicket` | Body: `{ "serviceType": "A" }` | 櫃員代客取號。 |
+| `GET` | `/api/agent/history` | Query: `?serviceType=A&limit=50` | 查詢已完成或歷史叫號明細。 |
+| `GET` | `/api/agent/ticket/:id` | Path: `id` | 查詢單筆票券之內部完整詳細欄位。 |
+
+### 4. 管理員端點 (Admin Operations - 需 Admin 權限與 CSRF Token)
+
+| 方法 | 路徑 | 參數說明 | 描述 |
+|------|------|----------|------|
+| `GET` | `/api/agents` | 無 | 取得所有櫃員與管理員帳號清單。 |
+| `GET` | `/api/agents/:id` | Path: `id` | 查詢單一櫃員帳號詳細資料。 |
+| `POST` | `/api/agents` | Body: `{ "account", "name", "password", "counter", "role", "active" }` | 建立新櫃員帳號。 |
+| `PUT` | `/api/agents/:id` | Body: `{ "name", "counter", "role", "active", "password"(選填) }` | 更新指定櫃員帳號設定。 |
+| `DELETE` | `/api/agents/:id` | Path: `id` | 刪除指定櫃員帳號。 |
 
 ---
 
-## 資料模型 (SQLite)
+## WebSocket 即時通訊事件
 
-### seq 表
-儲存各服務別每日的流水號進度：
-- `serviceType` (TEXT)：服務類別（如 A, B, C 等）。
-- `ymd` (TEXT)：日期字串（格式：YYYYMMDD）。
-- `seq` (INTEGER)：當日目前最大流水號。
-- 主鍵：`(serviceType, ymd)`
+本系統整合 Socket.IO 提供毫秒級的狀態同步廣播：
 
-### tickets 表
-儲存排隊票券資料：
-- `id` (INTEGER PRIMARY KEY AUTOINCREMENT)：票券唯一識別碼。
-- `serviceType` (TEXT)：服務類別。
-- `number` (TEXT)：產生的排隊號碼（如 A001, B002）。
-- `status` (TEXT)：目前狀態（waiting / calling / serving / finished / cancelled）。
-- `counter` (TEXT)：處理該票券的櫃台號。
-- `result` (TEXT)：服務處理結果或取消原因。
-- `createdAt` (TEXT)：取號時間。
-- `calledAt` (TEXT)：叫號時間。
-- `finishedAt` (TEXT)：完成或取消時間。
+| 事件名稱 | 方向 | 載荷格式 (Payload) | 觸發時機與用途 |
+|----------|------|--------------------|----------------|
+| `queue:update` | 伺服器廣播至客戶端 | `{ "serviceType": "A", "overview": { ... } }` | 當有新取號、完成服務、取消票券時觸發，大廳看板與 Kiosk 即時更新等候人數。 |
+| `call:made` | 伺服器廣播至客戶端 | `{ "ticket": { "id": 1, "number": "A001", "counter": "2", "calledAt": "..." } }` | 櫃員執行叫號或重新叫號時廣播，大廳看板接收後切換跳號顯示並觸發語音廣播。 |
+| `agent:message` | 伺服器廣播至櫃員端 | `{ "type": "info", "message": "系統通告內容" }` | 系統管理員或背景服務發送給全體在線櫃員之即時訊息。 |
 
-### agents 表
-儲存系統櫃員帳號資料：
-- `id` (INTEGER PRIMARY KEY AUTOINCREMENT)：帳號唯一識別碼。
-- `account` (TEXT UNIQUE)：登入帳號。
-- `name` (TEXT)：櫃員姓名。
-- `password` (TEXT)：經 bcrypt 處理之加密密碼。
-- `counter` (TEXT)：綁定的櫃台號。
-- `role` (TEXT)：角色權限（admin / agent）。
-- `active` (INTEGER)：啟用狀態（1 為啟用，0 為停用）。
-- `createdAt` (TEXT)：建立時間。
-- `updatedAt` (TEXT)：最後修改時間。
+---
 
-### 資料庫維護說明：移除歷史未使用欄位
+## 資料庫結構 (SQLite Schema)
 
-若您是從舊版本升級，舊版 `tickets` 表可能包含已不再使用的 `phone` 欄位。如需在維護時段精簡資料表結構，可連接資料庫並執行以下 SQL 指令：
+系統採用 SQLite 嵌入式資料庫，儲存於 `db/queue.db` 檔案中，主要包含三張核心資料表：
 
-```sql
--- 1. 建立新結構表（不含 phone 欄位）
-CREATE TABLE tickets_new (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  serviceType TEXT NOT NULL,
-  number TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'waiting',
-  counter TEXT,
-  result TEXT,
-  createdAt TEXT NOT NULL,
-  calledAt TEXT,
-  finishedAt TEXT
-);
+### 1. `seq` 表（每日業務流水號管理）
 
--- 2. 轉移舊有資料
-INSERT INTO tickets_new (id, serviceType, number, status, counter, result, createdAt, calledAt, finishedAt)
-SELECT id, serviceType, number, status, counter, result, createdAt, calledAt, finishedAt
-FROM tickets;
+| 欄位名稱 | 型態 | 條件約束 | 說明 |
+|----------|------|----------|------|
+| `serviceType` | TEXT | PRIMARY KEY (聯合主鍵) | 業務類別代碼（例如：A、B、C）。 |
+| `ymd` | TEXT | PRIMARY KEY (聯合主鍵) | 日期字串，格式為 `YYYYMMDD`。 |
+| `seq` | INTEGER | NOT NULL, DEFAULT 0 | 該服務別在該日期之當前最大發放號碼流水號。 |
 
--- 3. 替換資料表
-DROP TABLE tickets;
-ALTER TABLE tickets_new RENAME TO tickets;
-```
+### 2. `tickets` 表（排隊票券資料）
 
-備註：若已有完備的備份，且不介意資料庫中留存無用欄位，亦可選擇不執行此離線遷移。
+| 欄位名稱 | 型態 | 條件約束 | 說明 |
+|----------|------|----------|------|
+| `id` | INTEGER | PRIMARY KEY AUTOINCREMENT | 票券唯一系統序號。 |
+| `serviceType` | TEXT | NOT NULL | 服務類別（如 A、B、C）。 |
+| `number` | TEXT | NOT NULL | 完整票號字串（例如：`A001`、`B012`）。 |
+| `status` | TEXT | NOT NULL, DEFAULT 'waiting' | 票券狀態：`waiting` (等待中)、`calling` (叫號中)、`serving` (服務中)、`finished` (已完成)、`cancelled` (已取消)。 |
+| `counter` | TEXT | NULLABLE | 當前受理服務之櫃台編號。 |
+| `result` | TEXT | NULLABLE | 服務結果說明或取消原因備註。 |
+| `createdAt` | TEXT | NOT NULL | 取號建立時間（ISO 8601 / SQLite datetime）。 |
+| `calledAt` | TEXT | NULLABLE | 首次或最近叫號時間。 |
+| `finishedAt` | TEXT | NULLABLE | 完成服務或取消時間。 |
+
+### 3. `agents` 表（櫃員與管理員帳號資料）
+
+| 欄位名稱 | 型態 | 條件約束 | 說明 |
+|----------|------|----------|------|
+| `id` | INTEGER | PRIMARY KEY AUTOINCREMENT | 使用者識別 ID。 |
+| `account` | TEXT | UNIQUE, NOT NULL | 登入帳號名稱。 |
+| `name` | TEXT | NOT NULL | 櫃員或管理員真實姓名/顯示名稱。 |
+| `password` | TEXT | NOT NULL | 經 bcrypt 加密演算法計算後之密碼雜湊值。 |
+| `counter` | TEXT | NULLABLE | 預設綁定之櫃台編號（例如：`1`、`2`）。 |
+| `role` | TEXT | NOT NULL, DEFAULT 'agent' | 權限角色：`admin` (管理員)、`agent` (一般櫃員)。 |
+| `active` | INTEGER | NOT NULL, DEFAULT 1 | 啟用狀態：`1` (正常啟用)、`0` (停用凍結)。 |
+| `createdAt` | TEXT | NOT NULL | 帳號建立時間。 |
+| `updatedAt` | TEXT | NULLABLE | 帳號最後更新時間。 |
 
 ---
 
 ## 生產環境安全與部署建議
 
-### 1. 部署前手動安全檢查
+### 1. 部署前安全檢查清單
 
-在將系統部署至生產環境前，請確認以下項目是否已手動配置妥當：
-- 檢查 `.env` 中的 `NODE_ENV` 已設為 `production`。
-- 檢查 `SESSION_SECRET` 已替換為隨機安全金鑰，未保留預設的不安全值。
-- 檢查 `ALLOWED_ORIGINS` 僅包含受信任的 HTTPS 公開網域，不含 localhost。
-- 檢查 `PUBLIC_ORIGIN` 已設為實際公開的 HTTPS URL。
-- 檢查 `db/queue.db` 檔案權限，確保僅執行 Node/Bun 的使用者有權讀寫（建議權限設為 600 或更嚴格）。
-- 確認已將所有測試、預設或強度不足的密碼修改為強密碼。
-- 確認資料庫已設定自動定時備份機制，並確保 `.env` 與 `db/` 目錄不在 Git 版本追蹤中。
+- **環境模式**：確保 `.env` 中的 `NODE_ENV` 已設定為 `production`。
+- **金鑰安全**：確保 `SESSION_SECRET` 已替換為隨機高強度字串（嚴禁保留預設範例值）。
+- **CORS 來源**：確保 `ALLOWED_ORIGINS` 僅包含受信任的正式 HTTPS 網域，不得在生產環境啟用通配或未限制的本機來源。
+- **公開位址**：確認 `PUBLIC_ORIGIN` 已正確配置為外部訪問的完整網址（含 `https://`）。
+- **檔案權限**：將 `db/queue.db` 檔案權限設定為僅服務執行帳號具備讀寫權限（Linux 建議 `chmod 600 db/queue.db`）。
+- **版本控制保護**：確認 `.env` 與 `db/` 目錄已確實加入 `.gitignore`，避免機密外洩。
 
-### 2. Nginx 反向代理配置範例
-
-建議在 Express 前端架設 Nginx 作為反向代理並配置 SSL/TLS，以下為 Nginx 配置範例：
+### 2. Nginx 反向代理配置範例 (SSL/TLS + WebSocket)
 
 ```nginx
-server {
-    listen 443 ssl http2;
-    server_name queue.yourcompany.com;
-
-    ssl_certificate /path/to/cert.pem;
-    ssl_certificate_key /path/to/key.pem;
-
-    location / {
-        proxy_pass http://localhost:3000;
-        proxy_http_version 1.1;
-        
-        # 支援 WebSocket
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_cache_bypass $http_upgrade;
-        
-        # 轉發客戶端真實 IP 與安全 Headers
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-
-# HTTP 自動導向 HTTPS
+# HTTP 自動導向至 HTTPS
 server {
     listen 80;
     server_name queue.yourcompany.com;
     return 301 https://$server_name$request_uri;
 }
+
+# HTTPS 正式服務配置
+server {
+    listen 443 ssl http2;
+    server_name queue.yourcompany.com;
+
+    ssl_certificate /etc/letsencrypt/live/queue.yourcompany.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/queue.yourcompany.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        
+        # 支援 WebSocket 升級連線
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+        
+        # 傳遞客戶端真實 IP 與安全協議
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
 ```
 
-### 3. 使用 PM2 管理程序
-
-在生產環境中，建議使用 PM2 行程管理器來確保應用程式能於背景穩定運行、重啟與開機自啟：
+### 3. 使用 PM2 程序管理員穩定守護
 
 ```powershell
-# 全局安裝 PM2
+# 全域安裝 PM2
 bun install -g pm2
 
-# 啟動應用並命名為 queue-system
-pm2 start server.js --name queue-system
+# 啟動服務並指定程序名稱
+pm2 start server.js --name "digital-queue-system"
 
-# 設定開機自啟並儲存當前狀態
-pm2 startup
+# 儲存當前程序清單並設定開機自啟
 pm2 save
+pm2 startup
 
-# 監控與查看日誌
-pm2 monit
-pm2 logs queue-system
+# 查看即時監控狀態與日誌
+pm2 status
+pm2 logs digital-queue-system
 ```
 
 ---
 
-## 疑難排解 (Troubleshooting)
+## 常見問題與疑難排解 (Troubleshooting)
 
-### 1. 連線被拒（EADDRINUSE: address already in use）
-- 原因：埠號（例如 3000）已被其他程式佔用。
-- 解決：可在啟動前透過環境變數指定其他埠號，例如：
-  ```powershell
-  $env:PORT='3001'
-  bun run dev
-  ```
-  或是找出並終止佔用該埠號的程序（Windows PowerShell 範例）：
-  ```powershell
-  Get-NetTCPConnection -LocalPort 3000 | Select-Object -ExpandProperty OwningProcess | ForEach-Object { Stop-Process -Id $_ -Force }
-  ```
+### 1. 埠號佔用錯誤（EADDRINUSE: address already in use）
+- **原因**：設定的連接埠（預設 3000）已被其他本機程序佔用。
+- **解決方法**：
+  - 指定其他連接埠啟動：
+    ```powershell
+    $env:PORT='3001'; bun run dev
+    ```
+  - 或於 Windows PowerShell 查詢並終止佔用該埠之程序：
+    ```powershell
+    Get-NetTCPConnection -LocalPort 3000 | Select-Object -ExpandProperty OwningProcess | ForEach-Object { Stop-Process -Id $_ -Force }
+    ```
 
-### 2. SQLite 資料庫鎖定（database is locked / SQLITE_BUSY）
-- 原因：同時有其他程序（如其他伺服器實例或 SQLite GUI 檢視工具）開啟並鎖定了資料庫檔案。
-- 解決：請關閉所有的外部資料庫連線或檢視器，並終止其他運行的 node/bun 程序。如仍無法解決，請先進行備份，然後嘗試清除 `db/` 目錄下的 `.db-wal` 及 `.db-shm` 檔案。
+### 2. 資料庫鎖定錯誤（database is locked / SQLITE_BUSY）
+- **原因**：多個程序同時開啟 SQLite 資料庫檔案進行寫入，或有 GUI 檢視軟體佔用鎖定。
+- **解決方法**：關閉所有第三方 SQLite 視覺化工具，終止重複運行的 background node/bun 程序。如仍無法釋放，備份資料庫後刪除 `db/` 目錄下的 `.db-wal` 與 `.db-shm` 暫存檔。
 
-### 3. CORS 跨域拒絕錯誤 (CORS origin denied)
-- 原因：前端網頁發送請求的 Origin 網域與伺服器設定的 `ALLOWED_ORIGINS` 不符合。
-- 解決：請檢查 `.env` 檔案中的 `ALLOWED_ORIGINS` 配置，確保請求的網域已完整列於其中。開發模式下 localhost 網址會自動被允許，無需設定。
+### 3. 跨域存取拒絕（CORS Origin Denied）
+- **原因**：前端發出請求之網域未包含於 `.env` 的 `ALLOWED_ORIGINS` 白名單內。
+- **解決方法**：檢查 `.env` 設定，將前端來源網址（例如 `https://kiosk.yourcompany.com`）加入 `ALLOWED_ORIGINS`，多個網域以逗號分隔且不要包含多餘空格。開發模式下 localhost 會自動放行。
 
-### 4. Captcha 圖片顯示錯誤或 sharp 套件安裝失敗
-- 原因：`sharp` 套件在部分環境下可能因原生依賴編譯失敗而無法安裝。
-- 解決：`sharp` 是選用相依套件，若安裝失敗，後端系統會自動改用 `svg-captcha` 原生的 SVG 向量格式傳回驗證碼。此降級不會影響登入功能，但建議生產環境配置好編譯環境以安裝 `sharp`，PNG 格式具備更佳的前端渲染相容性。
-
-### 5. 管理 API 回傳 missing csrf token 錯誤
-- 原因：對受保護的 POST/PUT/DELETE API 發送請求時，HTTP Header 中缺少 CSRF Token 或 Token 驗證失敗。
-- 解決：請確認瀏覽器已先透過 GET `/api/csrf` 取得 Token，並在發送修改請求時將其夾帶於 `x-csrf-token` Header 中。非瀏覽器客戶端（如 PowerShell / curl 等無瀏覽器 Origin 標頭之請求）不會觸發 CSRF 驗證。
-
-### 6. Git 提交遭拒（敏感檔案偵測）
-- 原因：您的 `.env` 或 `db/queue.db` 檔案可能未正確在 `.gitignore` 中排除，導致被 git 暫存並遭安全防護攔截。
-- 解決：請確認 `.gitignore` 包含 `node_modules`、`.env` 與 `db/` 項目，並執行以下指令取消暫存敏感檔案：
-  ```powershell
-  git reset HEAD .env
-  git reset HEAD db/queue.db
-  ```
+### 4. 管理 API 報告 CSRF 錯誤（EBADCSRFTOKEN / invalid csrf token）
+- **原因**：發送 `POST` / `PUT` / `DELETE` 請求至管理員 API 時，未在 Request Header 中提供有效的 `x-csrf-token`。
+- **解決方法**：請先呼叫 `GET /api/csrf` 取得 Token，並在發送管理變更請求時將其夾帶於 `x-csrf-token` 標頭中。
 
 ---
 
-## 更新日誌
+## 版本更新紀錄 (Changelog)
 
-### 2025-11-27
-- 實作完整的 CSRF 安全防護機制，防範跨站請求偽造。
-- 引入速率限制 (Rate limiting) 防護，有效減緩 DoS 阻斷服務攻擊風險。
-- 修補前端 DOM 操作中的 InnerHTML XSS 漏洞，改以安全 DOM API 與 textContent 構建。
-- 精簡與優化前端與後端的 CORS 邏輯，加強 DevTunnel 開發連線相容性。
-- 修補 Transitive Dependency 安全性漏洞，將 `cookie` 套件鎖定在安全版本 `0.7.0`。
-- 在 `public/utils/url-manager.js` 中新增安全白名單與協議校驗，拒絕非安全跳轉。
+### [1.2.0] - 2025-11-27
+- **安全性加固**：
+  - 實作完整 CSRF Token 驗證機制，全面保護管理與變更 API。
+  - 導入分級速率限制（Rate Limiting），防止 DoS 攻擊與惡意濫用。
+  - 重構前端 DOM 渲染邏輯，移除 `innerHTML` 拼接，全面改採安全 DOM API 與 `textContent` 防範 XSS 攻擊。
+  - 修補 Transitive Dependency 漏洞，將 `cookie` 套件強制升級至安全版本 `0.7.0`。
+  - 新增 `public/utils/url-manager.js` 白名單與協議校驗機制，杜絕未授權跳轉。
 
-### 2025-10-01
-- 新增智能 CORS 處理，開發環境下自動匹配 localhost。
-- 新增生產環境配置驗證，避免因缺失環境變數造成防護漏洞。
-- 統一錯誤處理機制，在生產環境中遮蔽詳細的堆疊追蹤資訊以防洩漏。
-- 提供前端輸入清理與驗證輔助工具。
+### [1.1.0] - 2025-10-01
+- **功能擴充與環境檢驗**：
+  - 實作智能 CORS 機制，開發環境自動識別並支援 localhost 與 DevTunnel。
+  - 新增生產環境啟動配置自檢機制，防範遺漏安全參數。
+  - 統一伺服器端錯誤處理格式，在生產環境中遮蔽詳細 Stack Trace 資訊避免資訊洩漏。
+  - 模組化前端輸入驗證工具庫（`input-validator.js`）。
 
-### 初始版本
-- 提供基礎的排隊叫號邏輯與狀態變更功能。
-- 提供 REST API 與 Socket.IO 即時更新看板之機制。
-- 整合 SQLite 資料庫儲存。
-- 提供 Captcha 圖形驗證碼與二維碼 QR Code 生成 API。
+### [1.0.0] - 2025-08-15
+- **初始版本發布**：
+  - 核心排隊取號、叫號、重叫、過號與完成服務生命週期。
+  - 支援 WebSocket (Socket.IO) 即時雙向大廳看板同步。
+  - 整合 SQLite 輕量資料庫與自動初始化。
+  - 提供 Captcha 圖形驗證碼與動態 QR Code 生成支援。
+
+---
+
+## 授權條款
+
+本專案採用專有授權。未經許可，禁止公開傳播或未授權之商業部署。

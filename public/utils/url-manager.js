@@ -50,11 +50,11 @@ class URLManager {
       hostname,
       protocol
     };
-    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.') || hostname.startsWith('10.')) {
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || /^(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})$/.test(hostname)) {
       env.isLocal = true;
       env.isDevelopment = true;
     }
-    if (hostname.includes('devtunnels.ms')) {
+    if (hostname.endsWith('.devtunnels.ms')) {
       env.isDevTunnel = true;
       env.isDevelopment = true;
     }
@@ -83,21 +83,6 @@ class URLManager {
       for (const allowed of allowedOrigins) {
         const allowedUrl = new URL(allowed);
         if (target.origin === allowedUrl.origin) {
-          return true;
-        }
-      }
-      const env = this.detectEnvironment();
-      if (env.isDevTunnel) {
-        const targetHost = target.hostname;
-        const currentHost = current.hostname;
-        if (targetHost.includes('devtunnels.ms') && currentHost.includes('devtunnels.ms')) {
-          return true;
-        }
-      }
-      if (env.isLocal) {
-        const targetHost = target.hostname;
-        if (targetHost === 'localhost' || targetHost === '127.0.0.1' ||
-          targetHost.startsWith('192.168.') || targetHost.startsWith('10.')) {
           return true;
         }
       }
@@ -146,22 +131,7 @@ class URLManager {
             return absolute.href;
           }
         } catch (e) {
-          const candidateHost = String(candidate).replace(/\s+/g, '');
-          if (absolute.hostname === candidateHost) {
-            return absolute.href;
-          }
-        }
-      }
-      if (env.isDevTunnel) {
-        const curHost = (new URL(location.href)).hostname;
-        if (absolute.hostname.includes('devtunnels.ms') && curHost.includes('devtunnels.ms')) {
-          return absolute.href;
-        }
-      }
-      if (env.isLocal) {
-        const host = absolute.hostname;
-        if (host === 'localhost' || host === '127.0.0.1' || host.startsWith('192.168.') || host.startsWith('10.')) {
-          return absolute.href;
+          // ignore malformed allowlist entries
         }
       }
       console.warn('URL Manager - sanitizeRedirectTarget rejected:', absolute.href);
@@ -289,10 +259,7 @@ class URLManager {
     }
     await this.safeRedirect(redirect, {
       fallbackPath: '/agent/index.html',
-      allowedOrigins: [
-        'http://localhost:3000',
-        this.config?.publicOrigin
-      ].filter(Boolean)
+      allowedOrigins: [this.config?.publicOrigin].filter(Boolean)
     });
   }
   checkAuthAndRedirect(requiredAuth = ['ui_agent_name', 'ui_agent_account']) {

@@ -1,243 +1,227 @@
-# 🔒 安全性更新說明
+# 系統安全性更新與防護規格說明 (Security Advisory & Hardening Guide)
 
-## 最新安全改進（2025-10-01）
-
-本次更新大幅強化了系統的安全性，包含以下重要改進：
+本文件詳細記錄數位叫號系統之安全性架構、防護機制、安全改進歷史以及生產環境安全維運守則。
 
 ---
 
-## 🎯 主要安全改進
+## 目錄
 
-### 1. **環境變數保護強化**
-- ✅ 更新 `.gitignore`，確保 `.env` 和資料庫檔案不會被追蹤
-- ✅ 建立詳細的 `.env.example.new` 範本，包含完整說明
-- ✅ 新增生產環境配置驗證
-
-### 2. **生產環境安全檢查**
-- ✅ 啟動時自動檢查必要的環境變數
-- ✅ 生產環境要求 Origin header，禁止無來源請求
-- ✅ 記錄所有 CORS 拒絕事件，便於安全監控
-
-### 3. **錯誤處理改善**
-- ✅ 生產環境只記錄錯誤訊息，避免洩漏堆疊追蹤
-- ✅ 統一錯誤處理格式
-- ✅ 向用戶只顯示通用錯誤訊息
-
-### 4. **前端輸入驗證**
-- ✅ 新增 `input-validator.js` 工具庫
-- ✅ 提供完整的輸入清理和驗證函數
-- ✅ 防止 XSS 攻擊和惡意輸入
-
-### 5. **自動安全檢查**
-- ✅ 新增 `security-check.js` 腳本
-- ✅ 啟動前自動執行安全檢查
-- ✅ 檢查環境配置、檔案權限、版本控制狀態等
+- [安全性概覽與防護矩陣](#安全性概覽與防護矩陣)
+- [縱深防禦架構圖](#縱深防禦架構圖)
+- [主要安全防護機制](#主要安全防護機制)
+  - [1. 跨站請求偽造防護 (CSRF Protection)](#1-跨站請求偽造防護-csrf-protection)
+  - [2. 速率限制與阻斷服務防護 (Rate Limiting)](#2-速率限制與阻斷服務防護-rate-limiting)
+  - [3. 跨站腳本攻擊防護與 DOM 安全 (XSS & DOM Sanitization)](#3-跨站腳本攻擊防護與-dom-安全-xss--dom-sanitization)
+  - [4. 智能 CORS 來源校驗與安全跳轉 (CORS & URL Safety)](#4-智能-cors-來源校驗與安全跳轉-cors--url-safety)
+  - [5. 相依套件安全性與 Cookie 加固 (Dependency Hardening)](#5-相依套件安全性與-cookie-加固-dependency-hardening)
+  - [6. 環境變數驗證與機密資料保護 (Environment Security)](#6-環境變數驗證與機密資料保護-environment-security)
+- [安全驗證與測試指南](#安全驗證與測試指南)
+- [前端安全工具庫參考](#前端安全工具庫參考)
+- [生產環境部署安全檢查清單](#生產環境部署安全檢查清單)
+- [安全漏洞通報流程](#安全漏洞通報流程)
+- [安全性更新日誌](#安全性更新日誌)
+- [專案聯繫資訊](#專案聯繫資訊)
+- [相關文件連結](#相關文件連結)
 
 ---
 
-## 🚀 如何使用
+## 安全性概覽與防護矩陣
 
-### 首次設定
+本系統實作多層次縱深防禦機制（Defense in Depth），涵蓋網路傳輸、請求驗證、身分認證、前端渲染與資料庫層面：
 
-1. **配置環境變數**
-   ```powershell
-   # 複製範本檔案
-   Copy-Item .env.example.new .env
-   
-   # 編輯 .env，填入實際的配置值
-   notepad .env
-   ```
-
-2. **執行安全檢查**
-   ```powershell
-   npm run security-check
-   ```
-
-3. **建立管理員帳號**
-   ```powershell
-   npm run create-admin
-   ```
-
-4. **啟動服務**
-   ```powershell
-   # 開發環境
-   npm run dev
-   
-   # 正式環境
-   npm start
-   ```
-
-### 日常使用
-
-- **每次部署前**：執行 `npm run security-check`
-- **每月**：執行 `npm audit` 檢查相依性漏洞
-- **定期**：更新相依套件 `npm update`
+| 防護面向 | 防護技術 / 機制 | 實作位置 / 套件 | 防禦威脅 |
+|----------|----------------|----------------|----------|
+| **請求來源驗證** | CSRF Token 綁定伺服器端 Session（Synchronizer Token） | `server.js`, `express-session` | 跨站請求偽造攻擊 (CSRF) |
+| **頻率控制** | 路由分級速率限制 | `express-rate-limit` | 暴力破解、DoS 阻斷服務、惡意洗票 |
+| **內容渲染** | DOM API + textContent 構建 | 前端全模組、`input-validator.js` | 儲存型與反射型 XSS 攻擊 |
+| **跳轉控制** | 協定校驗與網域白名單過濾 | `public/utils/url-manager.js` | 開放式重定向 (Open Redirect)、DOM XSS |
+| **跨域安全** | 智能 CORS 動態比對 | `cors` | 非法跨域竊取資料、惡意請求 |
+| **傳輸與標頭** | 安全 HTTP Header | `helmet` | 點擊劫持 (Clickjacking)、MIME 嗅探 |
+| **認證防護** | 圖形驗證碼 + 密碼 bcrypt 雜湊 | `svg-captcha`, `sharp`, `bcryptjs` | 自動化腳本暴破、憑證填充攻擊 |
+| **機密安全** | .env 嚴格排除與權限管控 | `.gitignore`, SQLite 權限 | 憑證外洩、原始碼機密暴露 |
 
 ---
 
-## 📚 新增檔案說明
+## 縱深防禦架構圖
+
+```mermaid
+flowchart TD
+    Client([客戶端請求]) --> ReverseProxy[Nginx 反向代理 / SSL 終結]
+    ReverseProxy --> Helmet[Helmet 安全標頭中介軟體]
+    Helmet --> RateLimiter[分級速率限制器 Rate Limiter]
+    RateLimiter --> CORS[智能 CORS 來源比對]
+    
+    CORS --> Router{API 路由分類}
+    
+    Router -->|公開查詢 / 取號| PublicAPI[公開端點: Captcha 驗證 / 輸入過濾]
+    Router -->|櫃員操作| AgentAPI[Session 認證 + 角色授權檢驗]
+    Router -->|管理員變更| AdminAPI[CSRF Token 檢驗 + 管理員權限檢驗]
+    
+    PublicAPI --> Sanitizer[資料清理與參數校驗]
+    AgentAPI --> Sanitizer
+    AdminAPI --> Sanitizer
+    
+    Sanitizer --> DB[(SQLite 參數化查詢)]
+```
+
+---
+
+## 主要安全防護機制
+
+### 1. 跨站請求偽造防護 (CSRF Protection)
+
+- 針對所有敏感的狀態修改操作（`POST`、`PUT`、`DELETE`），後端均強制要求驗證 CSRF Token。
+- 登入後，前端透過 `GET /api/csrf` 端點獲取 Token；Token 以 `crypto.randomBytes` 產生並保存於伺服器端 Session，比對時使用 `crypto.timingSafeEqual`。
+- 客戶端在發起修改請求時，必須在 HTTP 標頭中夾帶 `x-csrf-token`，否則伺服器將直接拒絕請求並回傳 `403 Forbidden`。
+- 採用條件式 CSRF 機制，精確區隔公開 Kiosk 取號端點與內部管理 API。
+
+### 2. 速率限制與阻斷服務防護 (Rate Limiting)
+
+系統依據 API 端點的敏感度與使用情境，實施分級速率限制：
+
+- **取號頻率限制 (`ticketCreationLimiter`)**：限制單一 IP 短時間內的取號次數，防止惡意腳本大量消耗號碼流水號。
+- **公開讀取限制 (`publicReadLimiter`)**：限制大廳看板與查詢 API 的請求頻率，降低伺服器負載。
+- **管理與認證限制 (`adminAgentLimiter`, `loginLimiter`)**：針對登入與管理端點施加嚴格的嘗試次數限制，防範暴力破解。
+
+### 3. 跨站腳本攻擊防護與 DOM 安全 (XSS & DOM Sanitization)
+
+- **前端渲染安全**：全面重構管理後台（`agents.html`）、櫃員端（`agent.js`）與票券查詢頁（`ticket.js`），移除動態拼接 `innerHTML` 的作法，全面改用原生 `document.createElement()` 與 `element.textContent` 進行節點建構與賦值。
+- **輸入清理工具庫 (`input-validator.js`)**：提供字串實體編碼、帳號/姓名白名單字元過濾與長度校驗。
+
+### 4. 智能 CORS 來源校驗與安全跳轉 (CORS & URL Safety)
+
+- **自動化跨域判斷**：
+  - 開發模式（`NODE_ENV=development`）下自動放行 `localhost` 與 `127.0.0.1` 之連線，便利本地與 DevTunnel 偵錯。
+  - 生產模式（`NODE_ENV=production`）下嚴格比對 `.env` 中設定之 `ALLOWED_ORIGINS`，拒絕任何非信任來源並記錄審計日誌。
+- **URL 跳轉防護 (`url-manager.js`)**：
+  - 封鎖 Protocol-relative URL（例如 `//attacker.com`）。
+  - 僅允許標準 `http:` 與 `https:` 協定。
+  - 針對非同源或非白名單跳轉實施攔截與降級回首頁保護。
+
+### 5. 相依套件安全性與 Cookie 加固 (Dependency Hardening)
+
+- **漏洞修補鎖定**：透過 `package.json` 中的 `overrides` 將傳遞相依套件 `cookie` 強制鎖定在安全版本 `0.7.0`，防範 Cookie 名稱與屬性解析繞過漏洞。
+- **Cookie 屬性加固**：Session Cookie 配置 `HttpOnly` 與 `SameSite=Lax`，生產環境另加 `Secure`，降低 Cookie 遭腳本讀取的風險。
+
+### 6. 環境變數驗證與機密資料保護 (Environment Security)
+
+- **啟動前檢查**：伺服器啟動時會主動驗證環境配置；任何環境未設定 `SESSION_SECRET`，或生產環境未設定 `ALLOWED_ORIGINS`、`TRUST_PROXY`，伺服器將立即終止啟動以防暴露於危險中。
+- **版本控制隔離**：`.gitignore` 預設排除 `.env`、`*.db`、`*.sqlite` 以及日誌檔案，確保敏感憑證不流入版本控制系統。
+
+---
+
+## 安全驗證與測試指南
+
+在部署或提交變更前，請透過以下流程進行安全性驗證：
+
+### 1. 執行相依套件安全稽核
+
+```powershell
+# 檢查套件安全性漏洞
+bun pm audit
+```
+
+### 2. 本地開發與 CSRF 功能驗證
+
+啟動本地服務：
+```powershell
+bun run dev
+```
+
+測試 CSRF 防護行為（未帶 Token 應回傳 403，帶 Token 應成功）：
+```powershell
+# 1. 取得 CSRF Token
+$response = Invoke-RestMethod -Uri "http://localhost:3000/api/csrf" -SessionVariable session
+$token = $response.csrfToken
+Write-Host "取得 CSRF Token: $token"
+
+# 2. 攜帶 Token 進行合法請求
+Invoke-RestMethod -Uri "http://localhost:3000/api/agents" -Method Get -WebSession $session
+```
+
+---
+
+## 前端安全工具庫參考
 
 ### `public/utils/input-validator.js`
-前端輸入驗證工具，提供以下功能：
-- HTML 實體編碼（防 XSS）
-- 帳號、姓名、櫃台號清理
-- 密碼強度驗證
-- URL 清理與驗證
 
-**使用範例**：
+提供前端介面常用的輸入清理與驗證方法：
+
 ```javascript
-// 在 HTML 中引入
+// 引入方式
 <script src="/utils/input-validator.js"></script>
 
-// 使用驗證
-const account = InputValidator.sanitizeAccount(userInput);
-const name = InputValidator.sanitizeName(userName);
+// HTML 實體編碼（防範 XSS）
+const safeText = InputValidator.escapeHtml(rawUserInput);
 
-// 或使用便利函數
-const cleanAccount = sanitizeInput.account(userInput);
+// 帳號格式過濾（僅允許英數字元與常用符號）
+const cleanAccount = InputValidator.sanitizeAccount(accountInput);
+
+// 姓名格式過濾
+const cleanName = InputValidator.sanitizeName(nameInput);
 ```
 
-### `SECURITY-DEPLOYMENT.md`
-完整的生產環境部署安全檢查清單，包含：
-- 部署前檢查項目
-- Nginx 配置範例
-- 系統層級安全設定
-- 監控與日誌設定
-- 定期維護任務
-- 應急處理程序
+### `public/utils/url-manager.js`
 
-### `scripts/security-check.js`
-自動安全檢查腳本，會檢查：
-- 環境變數配置
-- .gitignore 設定
-- 資料庫檔案權限
-- 相依套件完整性
-- 版本控制狀態
-- 程式碼中的硬編碼秘密
+提供安全的 URL 導航與驗證功能：
 
----
+```javascript
+// 引入方式
+<script src="/utils/url-manager.js"></script>
 
-## ⚙️ 環境變數說明
-
-### 開發環境 (development)
-```env
-NODE_ENV=development
-ALLOWED_ORIGINS=http://localhost:3000
-PUBLIC_ORIGIN=
-```
-
-### 正式環境 (production)
-```env
-NODE_ENV=production
-ALLOWED_ORIGINS=https://queue.yourcompany.com,https://www.yourcompany.com
-PUBLIC_ORIGIN=https://queue.yourcompany.com
-```
-
-**重要**：正式環境必須設定 `ALLOWED_ORIGINS` 和 `PUBLIC_ORIGIN`
-
----
-
-## 🔍 自動安全檢查
-
-系統現在會在啟動時自動執行安全檢查（透過 `prestart` script）。
-
-如果檢查失敗，可以：
-1. 查看錯誤訊息
-2. 修正問題
-3. 重新啟動
-
-手動執行檢查：
-```powershell
-npm run security-check
+// 驗證並安全跳轉
+UrlManager.safeRedirect(targetUrl, fallbackUrl);
 ```
 
 ---
 
-## 🛡️ 安全最佳實踐
+## 生產環境部署安全檢查清單
 
-### 1. **密碼管理**
-- 使用強密碼（至少 8 字元，包含字母和數字）
-- 定期更換管理員密碼
-- 絕不在程式碼中寫死密碼
+部署至正式環境前，請逐一核對下列項目：
 
-### 2. **HTTPS**
-- 正式環境必須使用 HTTPS
-- 透過 Nginx 或 Apache 配置 SSL/TLS
-- 使用有效的 SSL 憑證（Let's Encrypt 免費）
-
-### 3. **防火牆**
-- 只開放必要的埠（80, 443）
-- 使用 IP 白名單限制管理介面存取
-- 定期審查防火牆規則
-
-### 4. **備份**
-- 每日自動備份資料庫
-- 備份檔案加密儲存
-- 定期測試備份還原
-
-### 5. **監控**
-- 監控系統資源使用
-- 記錄並審查所有 API 請求
-- 設定異常行為警報
+- [ ] **環境模式**：`.env` 中已明確指定 `NODE_ENV=production`。
+- [ ] **密鑰更換**：`.env` 中之 `SESSION_SECRET` 已替換為高強度隨機字串（非預設值）。
+- [ ] **網域白名單**：`ALLOWED_ORIGINS` 僅列出正式營運之 HTTPS 網域，未包含任何 localhost 或測試來源。
+- [ ] **公開基礎 URL**：`PUBLIC_ORIGIN` 已正確配置為正式 HTTPS 網址。
+- [ ] **SSL/TLS 憑證**：已於 Nginx / 反向代理層啟用 HTTPS，並停用不安全的 SSL/TLS 舊版本。
+- [ ] **資料庫檔案權限**：`db/queue.db` 檔案權限已限制為僅執行服務之系統使用者可存取。
+- [ ] **弱密碼盤點**：已重設所有預設管理員與櫃員密碼為符合長度要求的強密碼。
+- [ ] **敏感檔案隔離**：確認 `.env` 與 `db/` 目錄未被 Git 追蹤。
 
 ---
 
-## 📞 如何回報安全問題
+## 安全漏洞通報流程
 
-如果您發現安全漏洞，請：
-1. **不要**在公開 issue 中回報
-2. 發送郵件至：[安全團隊 Email]
-3. 詳細描述問題和重現步驟
-4. 我們會在 24 小時內回應
+若您在系統中發現任何潛在的安全性漏洞，請遵循負責任的漏洞揭露原則：
 
----
-
-## 🔄 更新日誌
-
-### 2025-10-01
-- ✅ 強化 .gitignore 排除敏感檔案
-- ✅ 改善生產環境 CORS 檢查
-- ✅ 加入環境配置驗證
-- ✅ 統一錯誤處理，避免資訊洩漏
-- ✅ 新增前端輸入驗證工具
-- ✅ 新增自動安全檢查腳本
-- ✅ 建立安全部署指南
-
-### 2025-11-27
-- 🔄 修補 Transitive Dependency: `cookie` (npm) 的安全性問題，已將 `cookie` 鎖定為 `0.7.0`（使用 npm overrides）。此舉可防止 cookie 名稱、path 或 domain 中包含惡意字元導致的繞過或 XSS 風險。
-- 🔐 實作 CSRF 防護：
-   - 使用 `csurf`（cookie 模式）與 `cookie-parser`，在伺服器端統一啟用 CSRF token，以保護 session-based 的狀態改動請求。
-   - 新增 `GET /api/csrf` 供前端取回 token，並在各管理或授權路由保護後端 API。
-   - 透過 `conditionalCsrf` 機制判斷哪些路由需要 CSRF（例如：避免對公開 kiosk endpoints 強制 CSRF）
-
-- 🛡️ 新增速率限制（Rate limiting）來減少 DoS 風險：
-   - 為票券建立、公開查詢與管理介面添加不同等級的 rate limiters（例如 `ticketCreationLimiter`, `publicReadLimiter`, `adminAgentLimiter` 與 `staticLimiter` 等）。
-   - 針對登入/驗證、產生驗證碼等敏感操作亦保有專用的 limiter。
-
-- 🌐 CORS / DevTunnel：
-   - 標準化 `ALLOWED_ORIGINS` 的讀取與比對（自動去除尾端斜線，並允許 DevTunnel 或 localhost 在開發環境中使用），減少 Origin 判斷錯誤造成的封鎖或不安全行為。
-
-- 🧪 測試/驗證腳本：
-   - 新增 `scripts/test_csrf.ps1` 為 CSRF 行為測試（包含取得 token、攜帶 cookie 與 token 呼叫受保護 API，套件檢查攔截），確保 CSRF 保護不會影響正常工作流程。
-   - 已在本地開發環境測試 POST/GET 行為與相應的 RateLimit Header 回傳。
-
-- ⚠️ 權衡與建議：
-   - `csurf` 的版本受到注意（目前在套件庫顯示已 archived），這是短期採用的實作；建議定期評估是否需要替換為其他仍在維護或官方推薦的 CSRF 中間件。
-   - 長期建議將 `agents` 的 list GET API 加固為管理員可見（視實際使用情況決定），並考慮在 CI 中加入 rate-limiter 的覆蓋測試。
-   - 修正多處前端 DOM/XSS 風險：
-      - 在管理頁 (`public/admin/agents.html`) 使用 DOM API 建構表格以取代直接使用 `innerHTML` 串接，避免 agent 字段造成 XSS。
-      - 在櫃員端 (`public/agent/index.html`) 使用 `textContent` / DOM 元素建立取代 `innerHTML`，以避免直接插入票號或櫃台字串造成 DOM XSS。
-      - 在票券頁面 (`public/ticket/index.html`) 將 `innerHTML` 改為以 DOM API 建構，避免在 UI 中直接渲染來自後端的票號或欄位導致 XSS。
-      - 在 `public/utils/url-manager.js` 中新增跳轉白名單、協定檢核與 protocol-relative URL 拒絕，避免將使用者輸入直接作為跳轉目標造成未驗證的轉向或 XSS。（已驗證 fallback 行為）
+1. **請勿在公開 Issue 或討論區中回報安全漏洞**。
+2. 請直接透過專案聯繫人電子郵件通報，並提供：
+   - 漏洞類型與影響範圍評估。
+   - 詳細的復現步驟或概念驗證代碼 (PoC)。
+   - 建議的修補方案（若有）。
+3. 我們將於收到通報後盡速進行評估、修補並發布安全性更新公告。
 
 ---
 
-## 📖 延伸閱讀
+## 安全性更新日誌
 
-- [SECURITY-DEPLOYMENT.md](./SECURITY-DEPLOYMENT.md) - 完整部署指南
-- [Security-Guidelines_Traditional-Chinese.md](./Security-Guidelines_Traditional-Chinese.md) - 安全開發守則
-- [README.md](./README.md) - 專案說明文件
+### 2025-11-27 (安全性加固更新)
+- 導入 CSRF Token 驗證機制，加固所有管理員與櫃員狀態變更端點。
+- 新增分級速率限制（Rate Limiting）以減緩 DoS 風險。
+- 鎖定 Transitive Dependency `cookie` 版本為 `0.7.0`，修補潛在解析漏洞。
+- 重構管理端、櫃員端與票券端 DOM 渲染邏輯，杜絕 `innerHTML` XSS 風險。
+- 新增 URL 安全跳轉與協定驗證機制（`url-manager.js`）。
+
+### 2025-10-01 (基礎安全強化)
+- 強化 `.gitignore`，確保 `.env` 與資料庫檔案不進入版本庫。
+- 新增智能 CORS 來源校驗與日誌記錄。
+- 新增生產環境啟動配置檢查，防止未配置金鑰即上線。
+- 統一錯誤處理機制，生產環境遮蔽堆疊資訊。
+- 釋出前端輸入驗證工具（`input-validator.js`）。
 
 ---
 
-**重要提醒**：安全性是持續的過程，請定期檢查和更新您的安全設定！
+## 相關文件連結
+
+- [README.md](./README.md) - 專案主說明文件與快速開始
+- [package.json](./package.json) - 相依套件與版本宣告

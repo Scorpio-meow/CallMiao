@@ -44,7 +44,13 @@ class AuthChecker {
   }
   async logout() {
     try {
-      await fetch('/api/logout', { method: 'POST', credentials: 'include' });
+      const csrfRes = await fetch('/api/csrf', { credentials: 'include' });
+      const { csrfToken } = csrfRes.ok ? await csrfRes.json() : {};
+      await fetch('/api/logout', {
+        method: 'POST',
+        credentials: 'include',
+        headers: csrfToken ? { 'x-csrf-token': csrfToken } : {}
+      });
     } catch (e) {
       console.warn('Logout API error:', e);
     }

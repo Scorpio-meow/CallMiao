@@ -1,13 +1,12 @@
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const http = require('http');
 const express = require('express');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const session = require('express-session');
 const helmet = require('helmet');
-const csurf = require('csurf');
-const cookieParser = require('cookie-parser');
 const dayjs = require('dayjs');
 const QRCode = require('qrcode');
 const Database = require('better-sqlite3');
@@ -15,11 +14,11 @@ const bcrypt = require('bcryptjs');
 require('dotenv').config();
 const PORT = process.env.PORT || 3000;
 const isProdEnv = process.env.NODE_ENV === 'production';
-const SESSION_SECRET = process.env.SESSION_SECRET || 'fallback-insecure-secret-change-this';
-if (isProdEnv && SESSION_SECRET === 'fallback-insecure-secret-change-this') {
-  console.error('\n⚠️  CRITICAL: SESSION_SECRET is not set in production!');
+const SESSION_SECRET = process.env.SESSION_SECRET;
+if (!SESSION_SECRET) {
+  console.error('\n⚠️  CRITICAL: SESSION_SECRET is not set!');
   console.error('   Please set SESSION_SECRET in your .env file.');
-  console.error('   Generate one using: [Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 }))\n');
+  console.error('   Generate one using: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'base64\'))"\n');
   process.exit(1);
 }
 let ALLOWED_ORIGINS = [];
@@ -37,15 +36,19 @@ if (!isProdEnv) {
   }
 }
 const PUBLIC_ORIGIN = process.env.PUBLIC_ORIGIN || null;
+const TRUST_PROXY = process.env.TRUST_PROXY;
 if (isProdEnv) {
   console.log('🔒 Running in PRODUCTION mode');
-  const requiredEnvVars = ['ALLOWED_ORIGINS', 'PUBLIC_ORIGIN'];
+  const requiredEnvVars = ['ALLOWED_ORIGINS', 'TRUST_PROXY'];
   const missing = requiredEnvVars.filter(key => !process.env[key]);
   if (missing.length > 0) {
-    console.error('\n⚠️  SECURITY WARNING: Production environment requires the following environment variables:');
+    console.error('\n⚠️  CRITICAL: Production environment requires the following environment variables:');
     missing.forEach(key => console.error(`   - ${key}`));
-    console.error('\nPlease set these in your .env file or environment configuration.');
-    console.error('Continuing with default values, but this is NOT recommended for production!\n');
+    console.error('\nPlease set these in your .env file or environment configuration.\n');
+    process.exit(1);
+  }
+  if (!PUBLIC_ORIGIN) {
+    console.warn('\n⚠️  WARNING: PUBLIC_ORIGIN is not set; QR/public links will be derived from the request host.\n');
   }
   if (ALLOWED_ORIGINS.some(o => o.includes('localhost') || o.includes('127.0.0.1'))) {
     console.warn('\n⚠️  WARNING: ALLOWED_ORIGINS contains localhost addresses in production mode!');
@@ -129,26 +132,41 @@ function getNextNumber(serviceType) {
   });
   return getNext(serviceType);
 }
+function isAllowedOrigin(origin) {
+  if (!origin) return true;
+  if (!isProdEnv) {
+    const isLocalhost = origin.match(/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/);
+    if (isLocalhost) return true;
+  }
+  const currentLocalhost = `http://localhost:${PORT}`;
+  if (origin === currentLocalhost) return true;
+  const normalizedOrigin = origin.replace(/\/$/, '');
+  return ALLOWED_ORIGINS.includes(normalizedOrigin);
+}
+// TRUST_PROXY: hop count (e.g. 1), "false", or a comma-separated list of proxy IPs/subnets.
+// Only trusted proxies may set X-Forwarded-For/-Host/-Proto (used by req.ip, req.protocol, req.host).
+function parseTrustProxy(value) {
+  if (value === 'false') return false;
+  if (/^\d+$/.test(value)) return Number(value);
+  return value;
+}
 const app = express();
-app.set('trust proxy', 1);
+if (TRUST_PROXY) app.set('trust proxy', parseTrustProxy(TRUST_PROXY));
 const server = http.createServer(app);
 const { Server } = require('socket.io');
-const io = new Server(server, { cors: { origin: ALLOWED_ORIGINS } });
+const io = new Server(server, {
+  cors: { origin: ALLOWED_ORIGINS, credentials: true },
+  // The cors option only covers polling; WebSocket upgrades need their own Origin check
+  allowRequest: (req, cb) => {
+    const origin = req.headers.origin;
+    if (isAllowedOrigin(origin)) return cb(null, true);
+    console.warn(`⚠️  Socket.IO blocked: ${origin} (not in allowlist)`);
+    return cb('origin not allowed', false);
+  }
+});
 app.use(cors({
   origin: (origin, cb) => {
-    if (!origin) {
-      return cb(null, true);
-    }
-    if (!isProdEnv) {
-      const isLocalhost = origin.match(/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/);
-      if (isLocalhost) return cb(null, true);
-    }
-    const currentLocalhost = `http://localhost:${PORT}`;
-    if (origin === currentLocalhost) {
-      return cb(null, true);
-    }
-    const normalizedOrigin = origin.replace(/\/$/, '');
-    if (ALLOWED_ORIGINS.includes(normalizedOrigin)) return cb(null, true);
+    if (isAllowedOrigin(origin)) return cb(null, true);
     console.warn(`⚠️  CORS blocked: ${origin} (not in allowlist)`);
     return cb(new Error('CORS origin denied'));
   },
@@ -156,9 +174,8 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '100kb' }));
 app.use(express.urlencoded({ extended: true, limit: '100kb' }));
-app.use(cookieParser());
 const SQLiteStore = require('connect-sqlite3')(session);
-app.use(session({
+const sessionMiddleware = session({
   store: new SQLiteStore({
     db: 'sessions.db',
     dir: './db'
@@ -173,15 +190,41 @@ app.use(session({
     sameSite: 'lax'
   },
   name: 'queueSessionId'
-}));
-const csrfCookieConfig = { cookie: { httpOnly: true, sameSite: 'lax', secure: isProdEnv } };
-const csrfProtection = csurf(csrfCookieConfig);
+});
+app.use(sessionMiddleware);
+// Share the express-session with Socket.IO so room joins can be authorized
+io.engine.use(sessionMiddleware);
+// Synchronizer token stored in the server-side session (replaces deprecated csurf cookie mode)
+function issueCsrfToken(req) {
+  if (!req.session.csrfToken) req.session.csrfToken = crypto.randomBytes(32).toString('hex');
+  return req.session.csrfToken;
+}
+function isValidCsrfToken(req) {
+  const expected = req.session && req.session.csrfToken;
+  const provided = req.get('x-csrf-token');
+  if (!expected || typeof provided !== 'string') return false;
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+function csrfProtection(req, res, next) {
+  // Every CSRF-protected route requires login; keep 401 so clients redirect to the login page
+  if (!req.session || !req.session.agent) {
+    return res.status(401).json({ error: 'unauthorized - not logged in' });
+  }
+  if (isValidCsrfToken(req)) return next();
+  console.warn('⚠️  Invalid CSRF token detected', JSON.stringify({
+    path: req.path,
+    method: req.method,
+    origin: req.get('origin') || req.get('host')
+  }));
+  return res.status(403).json({ error: 'invalid csrf token' });
+}
 function conditionalCsrf(req, res, next) {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
   const exemptPaths = [
     '/api/tickets',
     '/api/qrcode',
-    '/api/admin/csrf',
   ];
   if (exemptPaths.includes(req.path)) return next();
   if (req.path.startsWith('/api/captcha')) return next();
@@ -193,21 +236,17 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'"],
       imgSrc: ["'self'", "data:", "blob:"],
-      fontSrc: ["'self'", "data:", "https://r2cdn.perplexity.ai"],
-      connectSrc: ["'self'", "ws:", "wss:"]
+      fontSrc: ["'self'", "data:"],
+      connectSrc: ["'self'", "ws:", "wss:"],
+      frameAncestors: ["'self'"],
+      // The app is also served over plain HTTP on the LAN (--host)
+      upgradeInsecureRequests: null
     }
   }
 }));
-app.use((req, res, next) => {
-  res.setHeader(
-    'Content-Security-Policy',
-    "default-src 'self'; img-src 'self' data: blob:; font-src 'self' data: https://r2cdn.perplexity.ai; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:"
-  );
-  next();
-});
 const isProd = process.env.NODE_ENV === 'production';
 const commonLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -262,13 +301,7 @@ const staticLimiter = rateLimit({
 });
 const captchaStore = {};
 const svgCaptcha = require('svg-captcha');
-function genToken() { return Math.random().toString(36).slice(2, 10); }
-const csrfStore = {};
-function genCsrf() { return Math.random().toString(36).slice(2, 12) + Date.now().toString(36); }
-setInterval(() => {
-  const now = Date.now();
-  for (const t in csrfStore) { if (now - (csrfStore[t].createdAt || 0) > 15 * 60 * 1000) delete csrfStore[t]; }
-}, 5 * 60 * 1000);
+function genToken() { return crypto.randomBytes(16).toString('hex'); }
 setInterval(() => {
   const now = Date.now();
   for (const t in captchaStore) { if (captchaStore[t].expiresAt < now) delete captchaStore[t]; }
@@ -307,30 +340,28 @@ app.post('/api/login', loginLimiter, (req, res) => {
   const { account, password, captchaToken, captcha } = req.body || {};
   if (!captchaToken || !captcha) return res.status(400).json({ error: 'captcha required' });
   const rec = captchaStore[captchaToken];
-  if (!rec) return res.status(400).json({ error: 'invalid or expired captcha token' });
-  if (String(rec.code).toLowerCase() !== String(captcha).toLowerCase()) return res.status(400).json({ error: 'captcha mismatch' });
+  if (!rec || rec.expiresAt < Date.now()) return res.status(400).json({ error: 'invalid or expired captcha token' });
   delete captchaStore[captchaToken];
+  if (String(rec.code).toLowerCase() !== String(captcha).toLowerCase()) return res.status(400).json({ error: 'captcha mismatch' });
   if (!account) return res.status(401).json({ error: 'invalid credentials' });
-  const user = db.prepare('SELECT * FROM agents WHERE account=?').get(account);
+  const user = db.prepare('SELECT * FROM agents WHERE account=? AND active=1').get(String(account));
   if (!user) return res.status(401).json({ error: 'invalid credentials' });
   const ok = (user.password && password) ? bcrypt.compareSync(String(password), String(user.password)) : false;
   if (!ok) return res.status(401).json({ error: 'invalid credentials' });
-  req.session.agent = {
+  const agent = {
     id: user.id,
     account: user.account,
     name: user.name,
     counter: user.counter,
     role: user.role
   };
-  return res.json({
-    ok: true,
-    agent: {
-      id: user.id,
-      account: user.account,
-      name: user.name,
-      counter: user.counter,
-      role: user.role
+  req.session.regenerate((err) => {
+    if (err) {
+      console.error('Session regenerate error:', isProdEnv ? err.message : err);
+      return res.status(500).json({ error: 'login failed' });
     }
+    req.session.agent = agent;
+    return res.json({ ok: true, agent });
   });
 });
 app.post('/api/logout', (req, res) => {
@@ -347,46 +378,15 @@ app.post('/api/logout', (req, res) => {
     res.json({ ok: true });
   }
 });
-app.post('/api/admin/csrf', adminAgentLimiter, (req, res) => {
-  try {
-    const token = genCsrf();
-    csrfStore[token] = { createdAt: Date.now() };
-    res.json({ csrfToken: token, expiresIn: 15 * 60 });
-  } catch (err) { res.status(500).json({ error: 'csrf error' }); }
-});
-app.get('/api/csrf', csurf(csrfCookieConfig), (req, res) => {
-  try {
-    const token = req.csrfToken ? req.csrfToken() : null;
-    if (!token) return res.status(400).json({ error: 'csrf not available' });
-    try {
-      const setCookie = res.getHeader && res.getHeader('Set-Cookie');
-      console.debug('CSRF token issued', {
-        path: req.path,
-        method: req.method,
-        origin: req.get('origin') || req.get('host'),
-        setCookie: !!setCookie
-      });
-    } catch (e) { /* ignore */ }
-    try {
-      res.cookie('XSRF-TOKEN', token, {
-        httpOnly: false,
-        sameSite: csrfCookieConfig.cookie.sameSite || 'lax',
-        secure: csrfCookieConfig.cookie.secure || false,
-        maxAge: 15 * 60 * 1000,
-        path: '/'
-      });
-    } catch (e) { /* ignore cookie setting errors */ }
-    res.json({ csrfToken: token });
-  } catch (err) {
-    res.status(500).json({ error: 'csrf error' });
-  }
+app.get('/api/csrf', requireAgentAuth, (req, res) => {
+  res.json({ csrfToken: issueCsrfToken(req) });
 });
 app.use('/api/agents', adminAgentLimiter);
-app.get('/api/agents', (req, res) => {
+app.get('/api/agents', requireAdmin, (req, res) => {
   const rows = db.prepare('SELECT id, account, name, counter, role, active, createdAt, updatedAt FROM agents ORDER BY id DESC').all();
   res.json({ agents: rows });
 });
-app.post('/api/agents', requireCsrf, (req, res) => {
+app.post('/api/agents', requireAdmin, (req, res) => {
   const { account, name, password, counter, role } = req.body || {};
   if (!account || !password) return res.status(400).json({ error: 'account and password required' });
   const now = dayjs().toISOString();
@@ -401,24 +401,25 @@ app.post('/api/agents', requireCsrf, (req, res) => {
     res.status(500).json({ error: 'create failed' });
   }
 });
-app.get('/api/agents/:id', (req, res) => {
+app.get('/api/agents/:id', requireAdmin, (req, res) => {
   const row = db.prepare('SELECT id, account, name, counter, role, active, createdAt, updatedAt FROM agents WHERE id=?').get(req.params.id);
   if (!row) return res.status(404).json({ error: 'not found' });
   res.json({ agent: row });
 });
-app.put('/api/agents/:id', requireCsrf, (req, res) => {
+app.put('/api/agents/:id', requireAdmin, (req, res) => {
   const id = req.params.id;
   const { name, password, counter, role, active } = req.body || {};
   const now = dayjs().toISOString();
   const existing = db.prepare('SELECT * FROM agents WHERE id=?').get(id);
   if (!existing) return res.status(404).json({ error: 'not found' });
   const hash = password ? bcrypt.hashSync(String(password), 10) : existing.password;
+  const newRole = role === undefined ? existing.role : (role || null);
   db.prepare('UPDATE agents SET name=?, password=?, counter=?, role=?, active=?, updatedAt=? WHERE id=?')
-    .run(name || existing.name, hash, counter || existing.counter, role || existing.role, (active === undefined ? existing.active : active), now, id);
+    .run(name || existing.name, hash, counter || existing.counter, newRole, (active === undefined ? existing.active : active), now, id);
   const row = db.prepare('SELECT id, account, name, counter, role, active, createdAt, updatedAt FROM agents WHERE id=?').get(id);
   res.json({ agent: row });
 });
-app.delete('/api/agents/:id', requireCsrf, (req, res) => {
+app.delete('/api/agents/:id', requireAdmin, (req, res) => {
   const id = req.params.id;
   db.prepare('DELETE FROM agents WHERE id=?').run(id);
   res.json({ ok: true });
@@ -428,6 +429,12 @@ app.use(express.static(path.join(__dirname, 'public')));
 function emitQueueUpdate(serviceType) {
   const overview = getOverview();
   io.emit('queue:update', { serviceType, overview });
+}
+// Fields safe to expose to anonymous clients; excludes agent notes (result)
+function publicTicket(row) {
+  if (!row) return row;
+  const { id, serviceType, number, status, counter, createdAt, calledAt, finishedAt } = row;
+  return { id, serviceType, number, status, counter, createdAt, calledAt, finishedAt };
 }
 function getOverview() {
   const rows = db.prepare(`
@@ -453,17 +460,15 @@ app.get('/api/health', (req, res) => {
 });
 function inferPublicOrigin(req) {
   if (PUBLIC_ORIGIN) return PUBLIC_ORIGIN;
-  const forwardedProto = (req.get('x-forwarded-proto') || '').split(',')[0];
-  const proto = forwardedProto || req.protocol || 'http';
-  const forwardedHost = (req.get('x-forwarded-host') || req.get('x-forwarded-hostname') || '').split(',')[0];
-  const host = forwardedHost || req.get('host') || `localhost:${PORT}`;
-  if ((!process.env.NODE_ENV || process.env.NODE_ENV !== 'development') && forwardedHost && forwardedHost !== req.get('host')) {
-    console.debug('inferPublicOrigin: using forwarded host', { forwardedHost, hostHeader: req.get('host'), forwardedProto });
-  }
-  return `${proto}://${host}`;
+  // req.protocol / req.host honor X-Forwarded-* only from proxies trusted via TRUST_PROXY
+  const host = req.host || `localhost:${PORT}`;
+  return `${req.protocol}://${host}`;
+}
+function isPrivateLanHost(hostname) {
+  return /^(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})$/.test(hostname);
 }
 function detectEnvironment(req) {
-  const host = req.get('host') || `localhost:${PORT}`;
+  const host = req.host || `localhost:${PORT}`;
   const hostname = host.split(':')[0];
   const env = {
     isLocal: false,
@@ -473,11 +478,10 @@ function detectEnvironment(req) {
     port: PORT,
     nodeEnv: process.env.NODE_ENV || 'development'
   };
-  if (hostname === 'localhost' || hostname === '127.0.0.1' ||
-    hostname.startsWith('192.168.') || hostname.startsWith('10.')) {
+  if (hostname === 'localhost' || hostname === '127.0.0.1' || isPrivateLanHost(hostname)) {
     env.isLocal = true;
   }
-  if (hostname.includes('devtunnels.ms')) {
+  if (hostname.endsWith('.devtunnels.ms')) {
     env.isDevTunnel = true;
   }
   if (!env.isLocal && !env.isDevTunnel) {
@@ -536,13 +540,7 @@ app.get('/api/ticket/:id', publicReadLimiter, (req, res) => {
   const { id } = req.params;
   const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(id);
   if (!row) return res.status(404).json({ error: 'not found' });
-  res.json({ ticket: row });
-});
-app.get('/api/agent/ticket/:id', (req, res) => {
-  const { id } = req.params;
-  const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(id);
-  if (!row) return res.status(404).json({ error: 'not found' });
-  res.json({ ticket: row });
+  res.json({ ticket: publicTicket(row) });
 });
 app.get('/api/overview', publicReadLimiter, (req, res) => {
   res.json(getOverview());
@@ -566,21 +564,26 @@ function requireAgentAuth(req, res, next) {
   req.authenticatedAgent = agent;
   next();
 }
-function requireCsrf(req, res, next) {
-  if (!req.session || !req.session.agent) {
-    return res.status(401).json({ error: 'unauthorized - not logged in' });
-  }
-  if (req.session.agent.role !== 'admin') {
-    return res.status(403).json({ error: 'forbidden - admin only' });
-  }
-  next();
+function requireAdmin(req, res, next) {
+  requireAgentAuth(req, res, () => {
+    if (req.authenticatedAgent.role !== 'admin') {
+      return res.status(403).json({ error: 'forbidden - admin only' });
+    }
+    next();
+  });
 }
 app.use('/api/agent', adminAgentLimiter);
+app.get('/api/agent/ticket/:id', requireAgentAuth, (req, res) => {
+  const { id } = req.params;
+  const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  res.json({ ticket: row });
+});
 app.post('/api/agent/callNext', requireAgentAuth, (req, res) => {
-  const { serviceType, counter } = req.body || {};
+  const { serviceType } = req.body || {};
   if (!serviceType) return res.status(400).json({ error: 'serviceType is required' });
-  const ctr = (counter === undefined || counter === null) ? '' : String(counter).trim();
-  if (!ctr) return res.status(400).json({ error: 'counter is required' });
+  const ctr = String(req.authenticatedAgent.counter || '').trim();
+  if (!ctr) return res.status(400).json({ error: 'counter not assigned' });
   const busy = db.prepare("SELECT id FROM tickets WHERE counter=? AND status IN ('called','serving') LIMIT 1").get(ctr);
   if (busy) return res.status(409).json({ error: 'counter busy', ticketId: busy.id });
   const ticket = db.prepare(`
@@ -594,7 +597,7 @@ app.post('/api/agent/callNext', requireAgentAuth, (req, res) => {
   db.prepare('UPDATE tickets SET status=?, calledAt=?, counter=? WHERE id=?')
     .run('called', calledAt, ctr, ticket.id);
   const updated = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticket.id);
-  io.emit('call:made', { ticket: updated });
+  io.emit('call:made', { ticket: publicTicket(updated) });
   emitQueueUpdate(serviceType.toUpperCase());
   res.json({ ticket: updated });
 });
@@ -629,7 +632,7 @@ app.post('/api/agent/recall', requireAgentAuth, (req, res) => {
   const calledAt = dayjs().toISOString();
   db.prepare('UPDATE tickets SET calledAt=? WHERE id=?').run(calledAt, ticketId);
   const updated = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
-  io.emit('call:made', { ticket: updated });
+  io.emit('call:made', { ticket: publicTicket(updated) });
   emitQueueUpdate(updated.serviceType);
   res.json({ ticket: updated });
 });
@@ -684,10 +687,10 @@ app.post('/api/agent/createTicket', requireAgentAuth, (req, res) => {
   }
 });
 app.post('/api/agent/callSpecific', requireAgentAuth, (req, res) => {
-  const { ticketId, counter, internal } = req.body || {};
+  const { ticketId, internal } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: 'ticketId is required' });
-  const ctr = (counter === undefined || counter === null) ? '' : String(counter).trim();
-  if (!ctr) return res.status(400).json({ error: 'counter is required' });
+  const ctr = String(req.authenticatedAgent.counter || '').trim();
+  if (!ctr) return res.status(400).json({ error: 'counter not assigned' });
   const busy = db.prepare("SELECT id FROM tickets WHERE counter=? AND status IN ('called','serving') LIMIT 1").get(ctr);
   if (busy && String(busy.id) !== String(ticketId)) return res.status(409).json({ error: 'counter busy', ticketId: busy.id });
   const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
@@ -696,7 +699,7 @@ app.post('/api/agent/callSpecific', requireAgentAuth, (req, res) => {
   db.prepare('UPDATE tickets SET status=?, calledAt=?, counter=? WHERE id=?')
     .run('called', calledAt, ctr, ticketId);
   const updated = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
-  if (!internal) io.emit('call:made', { ticket: updated });
+  if (!internal) io.emit('call:made', { ticket: publicTicket(updated) });
   emitQueueUpdate(updated.serviceType);
   res.json({ ticket: updated });
 });
@@ -713,9 +716,10 @@ app.get('/api/agent/history', requireAgentAuth, (req, res) => {
   res.json({ tickets: rows });
 });
 app.post('/api/agent/message', requireAgentAuth, (req, res) => {
-  const { text, from, toCounter, toAgent } = req.body || {};
+  const { text, toCounter, toAgent } = req.body || {};
   if (!text) return res.status(400).json({ error: 'text is required' });
-  const payload = { text, from: from || 'agent', toCounter: toCounter || null, toAgent: toAgent || null, time: new Date().toISOString() };
+  const sender = req.authenticatedAgent;
+  const payload = { text, from: sender.name || sender.account, toCounter: toCounter || null, toAgent: toAgent || null, time: new Date().toISOString() };
   try {
     if (toCounter) {
       io.to(`counter:${String(toCounter)}`).emit('agent:message', payload);
@@ -725,7 +729,7 @@ app.post('/api/agent/message', requireAgentAuth, (req, res) => {
       io.to(`agent:${String(toAgent)}`).emit('agent:message', payload);
       return res.json({ ok: true, targeted: 'agent', toAgent });
     }
-    io.emit('agent:message', payload);
+    io.to('agents').emit('agent:message', payload);
     res.json({ ok: true });
   } catch (err) {
     console.error('Agent message error:', isProdEnv ? err.message : err);
@@ -748,16 +752,15 @@ app.get('/api/agent/profile', requireAgentAuth, (req, res) => {
 });
 app.put('/api/agent/profile', requireAgentAuth, (req, res) => {
   const agent = req.authenticatedAgent;
-  const { name, password, counter } = req.body || {};
+  const { name, password } = req.body || {};
   const now = dayjs().toISOString();
   let hash = agent.password;
   if (password) {
     hash = bcrypt.hashSync(String(password), 10);
   }
   const updateName = name || agent.name;
-  const updateCounter = counter || agent.counter;
-  db.prepare('UPDATE agents SET name=?, password=?, counter=?, updatedAt=? WHERE id=?')
-    .run(updateName, hash, updateCounter, now, agent.id);
+  db.prepare('UPDATE agents SET name=?, password=?, updatedAt=? WHERE id=?')
+    .run(updateName, hash, now, agent.id);
   const updated = db.prepare('SELECT id, account, name, counter, role, active, createdAt, updatedAt FROM agents WHERE id=?').get(agent.id);
   res.json({ agent: updated });
 });
@@ -772,10 +775,25 @@ app.get('/api/qrcode', qrcodeLimiter, async (req, res) => {
     res.status(500).send('qrcode error');
   }
 });
+// Rooms an authenticated agent socket may join; anonymous sockets get none
+function socketAgentRooms(socket) {
+  const sess = socket.request.session;
+  if (!sess || !sess.agent) return null;
+  const agent = db.prepare('SELECT * FROM agents WHERE id=? AND active=1').get(sess.agent.id);
+  if (!agent) return null;
+  const rooms = ['agents', `agent:${agent.name || agent.account}`];
+  if (agent.counter) rooms.push(`counter:${agent.counter}`);
+  return rooms;
+}
 io.on('connection', (socket) => {
-  socket.on('join', (room) => socket.join(room));
+  const rooms = socketAgentRooms(socket);
+  if (rooms) socket.join(rooms);
+  socket.on('join', (room) => {
+    const allowed = socketAgentRooms(socket);
+    if (allowed && allowed.includes(String(room))) socket.join(String(room));
+  });
   socket.on('leave', (room) => {
-    try { socket.leave(room); } catch (e) { /* noop */ }
+    try { socket.leave(String(room)); } catch (e) { /* noop */ }
   });
 });
 const args = process.argv.slice(2);
@@ -802,21 +820,6 @@ server.listen(PORT, bindHost, () => {
   } else {
     console.log(`Server running on ${protocol}://localhost:${PORT}`);
   }
-});
-app.use((err, req, res, next) => {
-  if (err && err.code === 'EBADCSRFTOKEN') {
-    const origin = req.get('origin') || req.get('host');
-    const cookieHeader = req.get('cookie') || '';
-    console.warn('⚠️  Invalid CSRF token detected', err.message || '', JSON.stringify({
-      path: req.path,
-      method: req.method,
-      origin,
-      cookiePresent: !!cookieHeader,
-      cookieSample: cookieHeader ? cookieHeader.split(';').slice(0, 3).join(';') : ''
-    }));
-    return res.status(403).json({ error: 'invalid csrf token' });
-  }
-  next(err);
 });
 app.use((err, req, res, next) => {
   const isJsonParseError = err && (err.type === 'entity.parse.failed' || (err instanceof SyntaxError && err.status === 400 && 'body' in err));
