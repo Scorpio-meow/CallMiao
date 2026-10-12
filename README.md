@@ -127,6 +127,7 @@ notepad .env
 PORT=3000
 NODE_ENV=development
 SESSION_SECRET=請設定隨機強密碼字串（至少32字元）
+SERVICE_TYPES=A,B,C,D,E
 # 開發模式下系統會自動允許本機來源 (localhost 與 127.0.0.1)，無需額外設定 ALLOWED_ORIGINS
 ```
 
@@ -138,6 +139,7 @@ SESSION_SECRET=請設定隨機強密碼字串（至少32字元）
 ALLOWED_ORIGINS=https://queue.yourcompany.com,https://your-tunnel-id.devtunnels.ms
 PUBLIC_ORIGIN=https://queue.yourcompany.com
 TRUST_PROXY=1
+SERVICE_TYPES=A,B,C,D,E
 ```
 
 ### 4. 初始化管理員帳號
@@ -199,7 +201,8 @@ bun start
 | `NODE_ENV` | 選填 | `development` | 運作環境模式。可設定為 `development` 或 `production`。 |
 | `SESSION_SECRET` | 必要 | 無 | Session 加密密鑰。未設定時系統將拒絕啟動（所有環境皆同）。 |
 | `ALLOWED_ORIGINS` | 生產環境必要 | 無 | 允許跨來源資源共用 (CORS) 的來源清單。多個來源請以逗號 `,` 分隔，結尾請勿包含斜線 `/`。 |
-| `PUBLIC_ORIGIN` | 生產環境建議 | 無 | 外部公開訪問的基礎 URL，系統生成票券 QR Code 與重定向連結時使用。 |
+| `PUBLIC_ORIGIN` | 生產環境必要 | 無 | 外部公開訪問的基礎 URL，系統生成票券 QR Code 與重定向連結時使用。開發環境未設定時由請求的 Host 推導。 |
+| `SERVICE_TYPES` | 必要 | 無 | 允許的業務類別代碼（逗號分隔，例如 `A,B,C,D,E`），須與取號機與櫃員介面的服務卡一致。取號、叫號、轉櫃等 API 只接受清單內代碼；未設定時系統將拒絕啟動。 |
 | `TRUST_PROXY` | 生產環境必要 | 無（不信任代理） | 反向代理信任設定：代理層數（如單層 Nginx 填 `1`）、直接對外服務填 `false`，或以逗號分隔的代理 IP／網段。只有受信任的代理可設定 `X-Forwarded-*`（影響速率限制的來源 IP 與公開網址推導）。 |
 
 ### 智能 CORS 存取控制規則
@@ -277,7 +280,7 @@ CNS/
 |------|------|----------|------|
 | `GET` | `/api/health` | 無 | 伺服器健康狀態檢查。 |
 | `POST` | `/api/tickets` | Body: `{ "serviceType": "A" }` | 訪客取號，建立新排隊票券。 |
-| `GET` | `/api/tickets/waiting` | Query: `?serviceType=A` | 取得指定業務類別之目前等待清單。 |
+| `GET` | `/api/tickets/waiting` | Query: `?serviceType=A`（選填） | 取得指定業務類別之目前等待清單；省略時回傳所有已設定類別。 |
 | `GET` | `/api/ticket/:id` | Path: `id` (票券 ID) | 查詢指定單筆票券目前狀態與進度。 |
 | `GET` | `/api/overview` | 無 | 取得全系統叫號現況、各櫃台狀態與等候人數。 |
 | `GET` | `/api/qrcode` | Query: `?text=https://...` | 生成指定文字之 PNG 格式二維碼圖片。 |
@@ -307,6 +310,8 @@ CNS/
 | `POST` | `/api/agent/createTicket` | Body: `{ "serviceType": "A" }` | 櫃員代客取號。 |
 | `GET` | `/api/agent/history` | Query: `?serviceType=A&limit=50` | 查詢已完成或歷史叫號明細。 |
 | `GET` | `/api/agent/ticket/:id` | Path: `id` | 查詢單筆票券之內部完整詳細欄位。 |
+
+> 票券狀態由伺服器把關：`markServing`／`finish` 只接受已叫號或服務中的票券；已完成（finished）或已取消（canceled）的票券不可再被叫號、服務、結束、取消或轉櫃，違規請求回傳 `409`。
 
 ### 4. 管理員端點 (Admin Operations - 需 Admin 權限與 CSRF Token)
 

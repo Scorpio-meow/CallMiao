@@ -3,10 +3,15 @@ const socket = io();
 const SERVICE_NAMES = { A: '一般保險服務', B: '理賠送件服務', C: '保單借款服務', D: '繳費服務', E: '人生設計所保險諮詢' };
 function onlyDigits(s) { return (s || '').replace(/\D/g, ''); }
 function setActiveService(code) { document.querySelector('#serviceType').value = code; }
-async function loadOverview() {
-    const res = await fetch('/api/overview');
-    const data = await res.json();
-    const sum = (data.summary || []).reduce((acc, s) => { acc[s.serviceType] = s; return acc; }, {});
+// queue:update pushes the overview; only explicit loads fetch it
+async function loadOverview(overview) {
+    let data = overview;
+    if (!data) {
+        const res = await fetch('/api/overview');
+        if (!res.ok) return;
+        data = await res.json();
+    }
+    const sum =(data.summary || []).reduce((acc, s) => { acc[s.serviceType] = s; return acc; }, {});
     // update card waits
     ['A', 'B', 'C', 'D', 'E'].forEach(code => {
         const el = document.querySelector(`[data-wait="${code}"]`);
@@ -78,4 +83,4 @@ document.addEventListener('click', (e) => {
     }
 });
 loadOverview();
-socket.on('queue:update', loadOverview);
+socket.on('queue:update', (payload) => loadOverview(payload && payload.overview));

@@ -2,4 +2,12 @@ node_modules
 package-lock.json
 db
 .env
+.env.*
+!.env.example
 *.cookie
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.log
+logs/

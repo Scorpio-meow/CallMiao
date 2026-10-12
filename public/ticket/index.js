@@ -3,7 +3,10 @@ const rawId = params.get('id');
 const id = rawId && /^\d+$/.test(rawId) ? rawId : null;
 const socket = io();
 let lastStatus = null;
-let forceAlertOnce = false;
+let latestOverview = null;
+let loadInFlight = false;
+let loadPending = false;
+let retryTimer = null;
 let notifyEnabled = (localStorage.getItem('notifyEnabled') === '1');
 let audioCtx = null;
 function vibrate(pattern) {
@@ -80,34 +83,59 @@ const STATUS_LABEL = {
   cancelled: '已取消'
 };
 function statusLabel(s) { return STATUS_LABEL[s] || (s || '-'); }
+function isActiveStatus(s) { return s === 'called' || s === 'serving'; }
+function renderInfo(ticket) {
+  const infoWrap = document.querySelector('#info');
+  if (!infoWrap) return;
+  infoWrap.textContent = '';
+  const pNum = document.createElement('p'); pNum.textContent = '號碼：'; const strong = document.createElement('strong'); strong.textContent = String(ticket.number || ''); pNum.appendChild(strong); infoWrap.appendChild(pNum);
+  const pStatus = document.createElement('p'); pStatus.textContent = '狀態：' + statusLabel(ticket.status); infoWrap.appendChild(pStatus);
+  const pCounter = document.createElement('p'); pCounter.textContent = '櫃台：' + String(ticket.counter || '-'); infoWrap.appendChild(pCounter);
+  const pCreated = document.createElement('p'); pCreated.textContent = '建立：' + new Date(ticket.createdAt).toLocaleString(); infoWrap.appendChild(pCreated);
+}
+// Transient failures (e.g. rate limited) keep the last known state; retry when the server allows it
+function scheduleRetry(res) {
+  const retryAfterSec = Number(res.headers.get('Retry-After'));
+  if (retryTimer || !Number.isFinite(retryAfterSec) || retryAfterSec <= 0) return;
+  retryTimer = setTimeout(() => { retryTimer = null; load(); }, retryAfterSec * 1000);
+}
+// Coalesce bursts of queue events into one in-flight load plus at most one follow-up
 async function load() {
+  if (loadInFlight) { loadPending = true; return; }
+  loadInFlight = true;
+  try {
+    await loadOnce();
+  } finally {
+    loadInFlight = false;
+    if (loadPending) { loadPending = false; load(); }
+  }
+}
+async function loadOnce() {
   if (!id) {
     document.querySelector('#info').textContent = '缺少票券 ID';
     return;
   }
   const res = await fetch(`/api/ticket/${id}`);
-  if (res.status !== 200) {
+  if (res.status === 404) {
     document.querySelector('#info').textContent = '票券不存在';
     document.querySelector('#progress').textContent = '';
+    return;
+  }
+  if (!res.ok) {
+    scheduleRetry(res);
     return;
   }
   const { ticket } = await res.json();
   const prev = lastStatus;
   const cur = ticket.status;
-  const infoWrap = document.querySelector('#info');
-  if (infoWrap) {
-    infoWrap.textContent = '';
-    const pNum = document.createElement('p'); pNum.textContent = '號碼：'; const strong = document.createElement('strong'); strong.textContent = String(ticket.number || ''); pNum.appendChild(strong); infoWrap.appendChild(pNum);
-    const pStatus = document.createElement('p'); pStatus.textContent = '狀態：' + statusLabel(ticket.status); infoWrap.appendChild(pStatus);
-    const pCounter = document.createElement('p'); pCounter.textContent = '櫃台：' + String(ticket.counter || '-'); infoWrap.appendChild(pCounter);
-    const pCreated = document.createElement('p'); pCreated.textContent = '建立：' + new Date(ticket.createdAt).toLocaleString(); infoWrap.appendChild(pCreated);
-  }
+  renderInfo(ticket);
   try {
-    const [ovRes, waitRes] = await Promise.all([
-      fetch('/api/overview'),
-      fetch(`/api/tickets/waiting?serviceType=${encodeURIComponent(ticket.serviceType || '')}`)
-    ]);
-    const overview = ovRes.ok ? await ovRes.json() : null;
+    const waitRes = await fetch(`/api/tickets/waiting?serviceType=${encodeURIComponent(ticket.serviceType || '')}`);
+    let overview = latestOverview;
+    if (!overview) {
+      const ovRes = await fetch('/api/overview');
+      overview = ovRes.ok ? await ovRes.json() : null;
+    }
     const waitingData = waitRes.ok ? await waitRes.json() : { tickets: [] };
     let nowCallingText = '-';
     if (overview && Array.isArray(overview.currentCalls)) {
@@ -136,23 +164,22 @@ async function load() {
   } catch (e) {
     document.querySelector('#progress').textContent = '';
   }
-  const isActiveState = (cur === 'called' || cur === 'serving');
-  const needAlert = (prev && prev !== cur && isActiveState) || (forceAlertOnce && isActiveState);
-  if (needAlert) {
+  if (prev && prev !== cur && isActiveStatus(cur)) {
     triggerAlert();
   }
-  forceAlertOnce = false;
   lastStatus = cur;
 }
-socket.on('queue:update', load);
-socket.on('call:made', (data) => {
-  try {
-    const eid = data && data.ticket && String(data.ticket.id);
-    if (eid && String(id) === eid) {
-      forceAlertOnce = true;
-    }
-  } catch (_) { }
+socket.on('queue:update', (payload) => {
+  if (payload && payload.overview) latestOverview = payload.overview;
   load();
+});
+socket.on('call:made', (data) => {
+  const t = data && data.ticket;
+  if (!t || !id || String(t.id) !== String(id)) return;
+  // Render and alert from the pushed ticket so a failed or rate-limited reload cannot suppress the call
+  renderInfo(t);
+  if (isActiveStatus(t.status)) triggerAlert();
+  lastStatus = t.status;
 });
 setupNotifyUI();
 load();

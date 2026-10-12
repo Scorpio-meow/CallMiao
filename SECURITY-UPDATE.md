@@ -105,7 +105,7 @@ flowchart TD
 
 ### 6. 環境變數驗證與機密資料保護 (Environment Security)
 
-- **啟動前檢查**：伺服器啟動時會主動驗證環境配置；任何環境未設定 `SESSION_SECRET`，或生產環境未設定 `ALLOWED_ORIGINS`、`TRUST_PROXY`，伺服器將立即終止啟動以防暴露於危險中。
+- **啟動前檢查**：伺服器啟動時會主動驗證環境配置；任何環境未設定 `SESSION_SECRET` 或 `SERVICE_TYPES`，或生產環境未設定 `ALLOWED_ORIGINS`、`TRUST_PROXY`、`PUBLIC_ORIGIN`，伺服器將立即終止啟動以防暴露於危險中。
 - **版本控制隔離**：`.gitignore` 預設排除 `.env`、`*.db`、`*.sqlite` 以及日誌檔案，確保敏感憑證不流入版本控制系統。
 
 ---

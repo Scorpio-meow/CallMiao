@@ -236,12 +236,18 @@ if (pickBtn) {
         alert('找不到對應的叫號');
     });
 }
-async function refresh() {
-    const res = await apiFetch('/api/overview');
-    const data = await res.json();
+// queue:update pushes the overview; explicit refreshes (after actions, on load) fetch it
+async function refresh(overview) {
+    let data = overview;
+    if (!data) {
+        const res = await apiFetch('/api/overview');
+        if (!res.ok) return;
+        data = await res.json();
+    }
     const serviceType = document.querySelector('#serviceType').value;
     // update waiting table (legacy)
     const waitingRes = await apiFetch(`/api/tickets/waiting?serviceType=${serviceType}`);
+    if (!waitingRes.ok) return;
     const waitingData = await waitingRes.json();
     const waitingTbody = document.querySelector('#waiting');
     if (waitingTbody) {
@@ -402,28 +408,15 @@ $('#callNext').onclick = async () => {
     }
     await refresh();
 };
-socket.on('queue:update', refresh);
-socket.on('call:made', refresh);
-// Join rooms for targeted messaging once connected
-socket.on('connect', () => {
-    try {
-        const ctr = sessionStorage.getItem('ui_agent_counter') || '';
-        if (ctr) socket.emit('join', `counter:${ctr}`);
-        if (agentName) socket.emit('join', `agent:${agentName}`);
-    } catch (e) { /* noop */ }
-});
-// 接收密傳訊息廣播：其他櫃員或系統訊息
+// call:made is always followed by queue:update, so one handler covers both
+socket.on('queue:update', (payload) => refresh(payload && payload.overview));
+// 接收密傳訊息：伺服器已依登入身分與櫃台挑選收件者
 socket.on('agent:message', (payload) => {
     try {
-        const { text, from, toCounter, toAgent } = payload || {};
+        const { text, from } = payload || {};
         if (!text) return;
         // 若為自己剛發送的訊息，避免重複顯示（已顯示「已送出訊息」）
         if (from && agentName && String(from) === String(agentName)) return;
-        // If message has a target and doesn't match this client, ignore
-        const myCounter = sessionStorage.getItem('ui_agent_counter') || '';
-        if (toCounter && String(toCounter) !== String(myCounter)) return;
-        if (toAgent && agentName && String(toAgent) !== String(agentName)) return;
-        // Otherwise show
         toast(`【訊息】${from || '系統'}：${text}`, 'info');
     } catch (e) { /* noop */ }
 });

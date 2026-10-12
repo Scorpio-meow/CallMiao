@@ -1,8 +1,13 @@
 const socket = io();
 let audioEnabled = false;
-async function render() {
-  const res = await fetch('/api/overview');
-  const data = await res.json();
+// queue:update pushes the overview; only the initial render fetches it
+async function render(overview) {
+  let data = overview;
+  if (!data) {
+    const res = await fetch('/api/overview');
+    if (!res.ok) return;
+    data = await res.json();
+  }
   const calls = data.currentCalls || [];
   const wrap = document.querySelector('#calls');
   wrap.textContent = '';
@@ -122,9 +127,9 @@ function enableAudio() {
     console.error('audio priming fallback failed', e);
   }
 }
-socket.on('queue:update', render);
+socket.on('queue:update', (payload) => render(payload && payload.overview));
 socket.on('call:made', (payload) => {
-  render();
+  // The display re-renders on the queue:update that follows every call
   const t = payload?.ticket;
   if (t) {
     // fallback for counter and chain parts to ensure complete speech
