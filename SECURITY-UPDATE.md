@@ -12,7 +12,7 @@
   - [1. 跨站請求偽造防護 (CSRF Protection)](#1-跨站請求偽造防護-csrf-protection)
   - [2. 速率限制與阻斷服務防護 (Rate Limiting)](#2-速率限制與阻斷服務防護-rate-limiting)
   - [3. 跨站腳本攻擊防護與 DOM 安全 (XSS & DOM Sanitization)](#3-跨站腳本攻擊防護與-dom-安全-xss--dom-sanitization)
-  - [4. 智能 CORS 來源校驗與安全跳轉 (CORS & URL Safety)](#4-智能-cors-來源校驗與安全跳轉-cors--url-safety)
+  - [4. 智慧 CORS 來源校驗與安全跳轉 (CORS & URL Safety)](#4-智慧-cors-來源校驗與安全跳轉-cors--url-safety)
   - [5. 相依套件安全性與 Cookie 加固 (Dependency Hardening)](#5-相依套件安全性與-cookie-加固-dependency-hardening)
   - [6. 環境變數驗證與機密資料保護 (Environment Security)](#6-環境變數驗證與機密資料保護-environment-security)
 - [安全驗證與測試指南](#安全驗證與測試指南)
@@ -20,7 +20,6 @@
 - [生產環境部署安全檢查清單](#生產環境部署安全檢查清單)
 - [安全漏洞通報流程](#安全漏洞通報流程)
 - [安全性更新日誌](#安全性更新日誌)
-- [專案聯繫資訊](#專案聯繫資訊)
 - [相關文件連結](#相關文件連結)
 
 ---
@@ -35,7 +34,7 @@
 | **頻率控制** | 路由分級速率限制 | `express-rate-limit` | 暴力破解、DoS 阻斷服務、惡意洗票 |
 | **內容渲染** | DOM API + textContent 構建 | 前端全模組、`input-validator.js` | 儲存型與反射型 XSS 攻擊 |
 | **跳轉控制** | 協定校驗與網域白名單過濾 | `public/utils/url-manager.js` | 開放式重定向 (Open Redirect)、DOM XSS |
-| **跨域安全** | 智能 CORS 動態比對 | `cors` | 非法跨域竊取資料、惡意請求 |
+| **跨域安全** | 智慧 CORS 動態比對 | `cors` | 非法跨域竊取資料、惡意請求 |
 | **傳輸與標頭** | 安全 HTTP Header | `helmet` | 點擊劫持 (Clickjacking)、MIME 嗅探 |
 | **認證防護** | 圖形驗證碼 + 密碼 bcrypt 雜湊 | `svg-captcha`, `sharp`, `bcryptjs` | 自動化腳本暴破、憑證填充攻擊 |
 | **機密安全** | .env 嚴格排除與權限管控 | `.gitignore`, SQLite 權限 | 憑證外洩、原始碼機密暴露 |
@@ -49,7 +48,7 @@ flowchart TD
     Client([客戶端請求]) --> ReverseProxy[Nginx 反向代理 / SSL 終結]
     ReverseProxy --> Helmet[Helmet 安全標頭中介軟體]
     Helmet --> RateLimiter[分級速率限制器 Rate Limiter]
-    RateLimiter --> CORS[智能 CORS 來源比對]
+    RateLimiter --> CORS[智慧 CORS 來源比對]
     
     CORS --> Router{API 路由分類}
     
@@ -88,10 +87,10 @@ flowchart TD
 - **前端渲染安全**：全面重構管理後台（`agents.html`）、櫃員端（`agent.js`）與票券查詢頁（`ticket.js`），移除動態拼接 `innerHTML` 的作法，全面改用原生 `document.createElement()` 與 `element.textContent` 進行節點建構與賦值。
 - **輸入清理工具庫 (`input-validator.js`)**：提供字串實體編碼、帳號/姓名白名單字元過濾與長度校驗。
 
-### 4. 智能 CORS 來源校驗與安全跳轉 (CORS & URL Safety)
+### 4. 智慧 CORS 來源校驗與安全跳轉 (CORS & URL Safety)
 
 - **自動化跨域判斷**：
-  - 開發模式（`NODE_ENV=development`）下自動放行 `localhost` 與 `127.0.0.1` 之連線，便利本地與 DevTunnel 偵錯。
+  - 開發模式（`NODE_ENV=development`）下只自動放行 `http://localhost:PORT`；其他本機連接埠須列入 `ALLOWED_ORIGINS`，因為 session cookie 由同一主機的所有連接埠共用。
   - 生產模式（`NODE_ENV=production`）下嚴格比對 `.env` 中設定之 `ALLOWED_ORIGINS`，拒絕任何非信任來源並記錄審計日誌。
 - **URL 跳轉防護 (`url-manager.js`)**：
   - 封鎖 Protocol-relative URL（例如 `//attacker.com`）。
@@ -105,7 +104,7 @@ flowchart TD
 
 ### 6. 環境變數驗證與機密資料保護 (Environment Security)
 
-- **啟動前檢查**：伺服器啟動時會主動驗證環境配置；任何環境未設定 `SESSION_SECRET` 或 `SERVICE_TYPES`，或生產環境未設定 `ALLOWED_ORIGINS`、`TRUST_PROXY`、`PUBLIC_ORIGIN`，伺服器將立即終止啟動以防暴露於危險中。
+- **啟動前檢查**：伺服器啟動時會主動驗證環境配置；任何環境未設定 `SESSION_SECRET`、`SERVICE_TYPES` 或 `MAX_WAITING_PER_SERVICE`，或生產環境未設定 `ALLOWED_ORIGINS`、`TRUST_PROXY`、`PUBLIC_ORIGIN`，伺服器將立即終止啟動以防暴露於危險中。
 - **版本控制隔離**：`.gitignore` 預設排除 `.env`、`*.db`、`*.sqlite` 以及日誌檔案，確保敏感憑證不流入版本控制系統。
 
 ---
@@ -214,7 +213,7 @@ UrlManager.safeRedirect(targetUrl, fallbackUrl);
 
 ### 2025-10-01 (基礎安全強化)
 - 強化 `.gitignore`，確保 `.env` 與資料庫檔案不進入版本庫。
-- 新增智能 CORS 來源校驗與日誌記錄。
+- 新增智慧 CORS 來源校驗與日誌記錄。
 - 新增生產環境啟動配置檢查，防止未配置金鑰即上線。
 - 統一錯誤處理機制，生產環境遮蔽堆疊資訊。
 - 釋出前端輸入驗證工具（`input-validator.js`）。

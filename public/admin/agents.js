@@ -215,9 +215,14 @@ document.getElementById('createBtn').onclick = async () => {
 document.getElementById('updateProfileBtn').onclick = async () => {
   const name = document.getElementById('profileName').value.trim();
   const password = document.getElementById('profilePassword').value;
+  const currentPassword = document.getElementById('profileCurrentPassword').value;
   const body = {};
   if (name !== (CURRENT_AGENT?.name || '')) body.name = name;
-  if (password) body.password = password;
+  if (password) {
+    if (!currentPassword) return showMsg('變更密碼需輸入目前密碼', true);
+    body.password = password;
+    body.currentPassword = currentPassword;
+  }
   if (Object.keys(body).length === 0) return showMsg('沒有變更', true);
   try {
     const csrfToken = await getCsrfToken();
@@ -231,6 +236,7 @@ document.getElementById('updateProfileBtn').onclick = async () => {
     if (data.error) return showMsg('更新失敗: ' + data.error, true);
     showMsg('更新成功');
     document.getElementById('profilePassword').value = '';
+    document.getElementById('profileCurrentPassword').value = '';
     if (body.name) {
       sessionStorage.setItem('ui_agent_name', body.name);
     }

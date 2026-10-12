@@ -30,6 +30,13 @@ if (SERVICE_TYPES.length === 0) {
   console.error('   Please set SERVICE_TYPES (comma-separated service codes, e.g. A,B,C,D,E) in your .env file.\n');
   process.exit(1);
 }
+// Upper bound on waiting tickets per service for anonymous ticket creation; staff createTicket is not capped
+const MAX_WAITING_PER_SERVICE = Number(process.env.MAX_WAITING_PER_SERVICE);
+if (!/^\d+$/.test(String(process.env.MAX_WAITING_PER_SERVICE)) || MAX_WAITING_PER_SERVICE < 1) {
+  console.error('\n⚠️  CRITICAL: MAX_WAITING_PER_SERVICE is not set or is not a positive integer!');
+  console.error('   Please set MAX_WAITING_PER_SERVICE (a positive integer, the maximum number of waiting tickets per service) in your .env file.\n');
+  process.exit(1);
+}
 let ALLOWED_ORIGINS = [];
 if (process.env.ALLOWED_ORIGINS) {
   ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim().replace(/\/$/, '')).filter(Boolean);
@@ -144,12 +151,20 @@ function getNextNumber(serviceType) {
   });
   return getNext(serviceType);
 }
+// Ticket numbers restart every day, so waiting tickets from earlier days are void: expire them once per day
+// before any queue read or write, otherwise they are called first and share numbers with today's tickets
+const expireStaleWaitingStmt = db.prepare("UPDATE tickets SET status='canceled', finishedAt=?, result='expired' WHERE status='waiting' AND createdAt < ?");
+let lastExpiryDay = null;
+function expireStaleWaiting() {
+  const today = dayjs().format('YYYYMMDD');
+  if (lastExpiryDay === today) return;
+  expireStaleWaitingStmt.run(dayjs().toISOString(), dayjs().startOf('day').toISOString());
+  lastExpiryDay = today;
+}
 function isAllowedOrigin(origin) {
   if (!origin) return true;
-  if (!isProdEnv) {
-    const isLocalhost = origin.match(/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/);
-    if (isLocalhost) return true;
-  }
+  // Outside production ALLOWED_ORIGINS already contains http://localhost:PORT; other local ports must be listed
+  // explicitly, because the session cookie is shared by every port of the same host
   const currentLocalhost = `http://localhost:${PORT}`;
   if (origin === currentLocalhost) return true;
   const normalizedOrigin = origin.replace(/\/$/, '');
@@ -466,6 +481,7 @@ function publicTicket(row) {
 // Overview covers configured service codes only, so legacy rows with other codes are not broadcast
 const serviceTypePlaceholders = SERVICE_TYPES.map(() => '?').join(',');
 function getOverview() {
+  expireStaleWaiting();
   const rows = db.prepare(`
     SELECT serviceType,
            SUM(CASE WHEN status='waiting' THEN 1 ELSE 0 END) AS waiting,
@@ -549,6 +565,10 @@ app.post('/api/tickets', ticketCreationLimiter, (req, res) => {
   try {
     const serviceType = normalizeServiceType((req.body || {}).serviceType);
     if (!serviceType) return res.status(400).json({ error: 'invalid serviceType' });
+    expireStaleWaiting();
+    // The per-IP rate limit bounds speed only; this bounds how many unserved tickets anonymous clients can queue
+    const waiting = db.prepare("SELECT COUNT(*) AS n FROM tickets WHERE serviceType=? AND status='waiting'").get(serviceType).n;
+    if (waiting >= MAX_WAITING_PER_SERVICE) return res.status(429).json({ error: 'queue is full, please try later' });
     const createdAt = dayjs().toISOString();
     const number = getNextNumber(serviceType);
     const info = db.prepare(`
@@ -570,6 +590,7 @@ app.get('/api/tickets/waiting', publicReadLimiter, (req, res) => {
     if (!serviceType) return res.status(400).json({ error: 'invalid serviceType' });
     serviceTypes = [serviceType];
   }
+  expireStaleWaiting();
   const rows = db.prepare(`
     SELECT id, serviceType, number, status, createdAt
     FROM tickets
@@ -654,6 +675,7 @@ app.post('/api/agent/callNext', requireAgentAuth, (req, res) => {
   if (!ctr) return res.status(400).json({ error: 'counter not assigned' });
   const busy = db.prepare("SELECT id FROM tickets WHERE counter=? AND status IN ('called','serving') LIMIT 1").get(ctr);
   if (busy) return res.status(409).json({ error: 'counter busy', ticketId: busy.id });
+  expireStaleWaiting();
   const ticket = db.prepare(`
     SELECT * FROM tickets
     WHERE serviceType=? AND status='waiting'
@@ -728,9 +750,18 @@ app.post('/api/agent/transfer', requireAgentAuth, (req, res) => {
   if (rejectTicketTransition('transfer', row, res)) return;
   const targetType = toServiceType ? normalizeServiceType(toServiceType) : row.serviceType;
   if (!targetType) return res.status(400).json({ error: 'invalid serviceType' });
+  // The public counter label may only be a counter an admin assigned to an active account (same rule as
+  // callNext/callSpecific), normalized the same way so the counter-busy check cannot be bypassed
+  let requestedCounter = null;
+  if (toCounter !== undefined) {
+    if (typeof toCounter !== 'string' || !toCounter.trim()) return res.status(400).json({ error: 'invalid counter' });
+    requestedCounter = toCounter.trim();
+    const assigned = db.prepare('SELECT 1 FROM agents WHERE active=1 AND TRIM(counter)=? LIMIT 1').get(requestedCounter);
+    if (!assigned) return res.status(400).json({ error: 'unknown counter' });
+  }
   const status = keepStatus ? row.status : 'waiting';
   const calledAt = keepStatus ? row.calledAt : null;
-  const counter = toCounter !== undefined ? toCounter : (keepStatus ? row.counter : null);
+  const counter = requestedCounter !== null ? requestedCounter : (keepStatus ? row.counter : null);
   if (keepStatus && counter) {
     const ctr = String(counter);
     const busy = db.prepare("SELECT id FROM tickets WHERE counter=? AND status IN ('called','serving') LIMIT 1").get(ctr);
@@ -767,6 +798,7 @@ app.post('/api/agent/callSpecific', requireAgentAuth, (req, res) => {
   if (!ctr) return res.status(400).json({ error: 'counter not assigned' });
   const busy = db.prepare("SELECT id FROM tickets WHERE counter=? AND status IN ('called','serving') LIMIT 1").get(ctr);
   if (busy && String(busy.id) !== String(ticketId)) return res.status(409).json({ error: 'counter busy', ticketId: busy.id });
+  expireStaleWaiting();
   const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
   if (!row) return res.status(404).json({ error: 'not found' });
   if (rejectTicketTransition('callSpecific', row, res)) return;
@@ -779,7 +811,10 @@ app.post('/api/agent/callSpecific', requireAgentAuth, (req, res) => {
   res.json({ ticket: updated });
 });
 app.get('/api/agent/history', requireAgentAuth, (req, res) => {
-  const limit = Math.min(parseInt(req.query.limit || '100', 10), 500);
+  // A negative LIMIT means "no limit" in SQLite, so accept only decimal digits and clamp to 1..500
+  const rawLimit = req.query.limit === undefined ? '100' : req.query.limit;
+  if (typeof rawLimit !== 'string' || !/^\d+$/.test(rawLimit)) return res.status(400).json({ error: 'invalid limit' });
+  const limit = Math.min(Math.max(parseInt(rawLimit, 10), 1), 500);
   let serviceType = null;
   if (req.query.serviceType !== undefined) {
     serviceType = normalizeServiceType(req.query.serviceType);
@@ -837,12 +872,17 @@ app.get('/api/agent/profile', requireAgentAuth, (req, res) => {
 });
 app.put('/api/agent/profile', requireAgentAuth, (req, res) => {
   const agent = req.authenticatedAgent;
-  const { name, password } = req.body || {};
+  const { name, password, currentPassword } = req.body || {};
   if (name && isDisplayNameTaken(String(name), agent.id)) return res.status(400).json({ error: 'name already in use' });
   const now = dayjs().toISOString();
   let hash = agent.password;
   if (password) {
-    hash = bcrypt.hashSync(String(password), 10);
+    // Replacing the long-term credential needs proof of the current one, not only a live session
+    if (typeof password !== 'string' || typeof currentPassword !== 'string' ||
+        !bcrypt.compareSync(currentPassword, String(agent.password))) {
+      return res.status(403).json({ error: 'current password required' });
+    }
+    hash = bcrypt.hashSync(password, 10);
   }
   const updateName = name || agent.name;
   // A password change revokes the account's other sessions; the current session is kept valid below

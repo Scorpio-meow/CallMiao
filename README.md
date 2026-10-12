@@ -18,7 +18,6 @@
 - [生產環境安全與部署建議](#生產環境安全與部署建議)
 - [常見問題與疑難排解 (Troubleshooting)](#常見問題與疑難排解-troubleshooting)
 - [版本更新紀錄 (Changelog)](#版本更新紀錄-changelog)
-- [專案聯繫資訊](#專案聯繫資訊)
 - [授權條款](#授權條款)
 
 ---
@@ -128,7 +127,8 @@ PORT=3000
 NODE_ENV=development
 SESSION_SECRET=請設定隨機強密碼字串（至少32字元）
 SERVICE_TYPES=A,B,C,D,E
-# 開發模式下系統會自動允許本機來源 (localhost 與 127.0.0.1)，無需額外設定 ALLOWED_ORIGINS
+MAX_WAITING_PER_SERVICE=200
+# 開發模式下系統會自動允許 http://localhost:PORT；其他本機連接埠（例如前端開發伺服器）須列入 ALLOWED_ORIGINS
 ```
 
 **正式生產環境（或搭配反向代理 / DevTunnel）範例配置：**
@@ -140,6 +140,7 @@ ALLOWED_ORIGINS=https://queue.yourcompany.com,https://your-tunnel-id.devtunnels.
 PUBLIC_ORIGIN=https://queue.yourcompany.com
 TRUST_PROXY=1
 SERVICE_TYPES=A,B,C,D,E
+MAX_WAITING_PER_SERVICE=200
 ```
 
 ### 4. 初始化管理員帳號
@@ -203,15 +204,16 @@ bun start
 | `ALLOWED_ORIGINS` | 生產環境必要 | 無 | 允許跨來源資源共用 (CORS) 的來源清單。多個來源請以逗號 `,` 分隔，結尾請勿包含斜線 `/`。 |
 | `PUBLIC_ORIGIN` | 生產環境必要 | 無 | 外部公開訪問的基礎 URL，系統生成票券 QR Code 與重定向連結時使用。開發環境未設定時由請求的 Host 推導。 |
 | `SERVICE_TYPES` | 必要 | 無 | 允許的業務類別代碼（逗號分隔，例如 `A,B,C,D,E`），須與取號機與櫃員介面的服務卡一致。取號、叫號、轉櫃等 API 只接受清單內代碼；未設定時系統將拒絕啟動。 |
+| `MAX_WAITING_PER_SERVICE` | 必要 | 無 | 每個業務類別允許的待叫（waiting）票券上限，須為正整數。達到上限時匿名取號回 429，櫃員代客取號不受限制；未設定時系統將拒絕啟動。 |
 | `TRUST_PROXY` | 生產環境必要 | 無（不信任代理） | 反向代理信任設定：代理層數（如單層 Nginx 填 `1`）、直接對外服務填 `false`，或以逗號分隔的代理 IP／網段。只有受信任的代理可設定 `X-Forwarded-*`（影響速率限制的來源 IP 與公開網址推導）。 |
 
-### 智能 CORS 存取控制規則
+### 智慧 CORS 存取控制規則
 
 | 請求來源類型 | 開發模式 (development) | 生產模式 (production) |
 |--------------|-----------------------|-----------------------|
 | **無 Origin 標頭請求**（如同源頁面、伺服器端腳本、curl） | 允許存取 | 允許存取 |
 | **本機同埠來源** (`http://localhost:當前PORT`) | 自動允許 | 自動允許 |
-| **本機異埠來源** (`http://localhost:其他PORT`) | 自動允許 | 拒絕存取（記錄安全日誌） |
+| **本機異埠來源** (`http://localhost:其他PORT`、`127.0.0.1`) | 須列入 ALLOWED_ORIGINS | 拒絕存取（記錄安全日誌） |
 | **符合 ALLOWED_ORIGINS 白名單之網域** | 允許存取 | 允許存取 |
 | **非白名單之外部網域** | 拒絕存取 | 拒絕存取（記錄安全日誌） |
 
@@ -306,9 +308,9 @@ CNS/
 | `POST` | `/api/agent/finish` | Body: `{ "ticketId": 10, "result": "處理完成" }` | 標記票券服務結束 (finished)。 |
 | `POST` | `/api/agent/recall` | Body: `{ "ticketId": 10 }` | 重新廣播呼叫當前票券。 |
 | `POST` | `/api/agent/cancel` | Body: `{ "ticketId": 10, "reason": "過號未到" }` | 取消票券 (cancelled)。 |
-| `POST` | `/api/agent/transfer` | Body: `{ "ticketId", "toServiceType", "toCounter" }` | 票券轉櫃或轉換業務服務別。 |
+| `POST` | `/api/agent/transfer` | Body: `{ "ticketId", "toServiceType", "toCounter" }` | 票券轉櫃或轉換業務服務別。`toCounter` 須為某個啟用帳號被指派的櫃台號。 |
 | `POST` | `/api/agent/createTicket` | Body: `{ "serviceType": "A" }` | 櫃員代客取號。 |
-| `GET` | `/api/agent/history` | Query: `?serviceType=A&limit=50` | 查詢已完成或歷史叫號明細。 |
+| `GET` | `/api/agent/history` | Query: `?serviceType=A&limit=50` | 查詢已完成或歷史叫號明細。`limit` 須為正整數，上限 500。 |
 | `GET` | `/api/agent/ticket/:id` | Path: `id` | 查詢單筆票券之內部完整詳細欄位。 |
 
 > 票券狀態由伺服器把關：`markServing`／`finish` 只接受已叫號或服務中的票券；已完成（finished）或已取消（canceled）的票券不可再被叫號、服務、結束、取消或轉櫃，違規請求回傳 `409`。
@@ -488,7 +490,7 @@ pm2 logs digital-queue-system
 
 ### [1.1.0] - 2025-10-01
 - **功能擴充與環境檢驗**：
-  - 實作智能 CORS 機制，開發環境自動識別並支援 localhost 與 DevTunnel。
+  - 實作智慧 CORS 機制，開發環境自動識別並支援 localhost 與 DevTunnel。
   - 新增生產環境啟動配置自檢機制，防範遺漏安全參數。
   - 統一伺服器端錯誤處理格式，在生產環境中遮蔽詳細 Stack Trace 資訊避免資訊洩漏。
   - 模組化前端輸入驗證工具庫（`input-validator.js`）。
