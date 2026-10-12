@@ -131,3 +131,103 @@ button.danger {
 .mt-18 {
     margin-top: 18px
 }
+tr.inactive td {
+    color: #9ca3af
+}
+
+tbody tr:hover {
+    background: #f8fafc
+}
+
+.row-actions {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end
+}
+
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 12px;
+    background: #f3f4f6;
+    color: #374151
+}
+
+td .badge.self {
+    margin-left: 6px
+}
+
+.badge.admin {
+    background: #eef2ff;
+    color: #3730a3
+}
+
+.badge.on {
+    background: #ecfdf5;
+    color: #065f46
+}
+
+.badge.off {
+    background: #fff1f2;
+    color: #991b1b
+}
+
+.badge.self {
+    background: #fef3c7;
+    color: #92400e
+}
+
+.filter {
+    max-width: 240px
+}
+
+dialog {
+    width: min(480px, calc(100vw - 32px));
+    border: 0;
+    border-radius: 10px;
+    padding: 16px;
+    box-shadow: 0 16px 48px rgba(2, 6, 23, .2)
+}
+
+dialog * {
+    box-sizing: border-box
+}
+
+dialog::backdrop {
+    background: rgba(15, 23, 42, .4)
+}
+
+dialog h3 {
+    margin: 0 0 8px
+}
+
+label.checkbox {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px
+}
+
+label.checkbox input {
+    width: auto
+}
+
+.dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 16px
+}
+
+button.secondary {
+    background: #e5e7eb;
+    color: #111827
+}
+
+button:disabled,
+select:disabled,
+input:disabled {
+    opacity: .6;
+    cursor: not-allowed
+}

@@ -9,7 +9,7 @@ const session = require('express-session');
 const helmet = require('helmet');
 const dayjs = require('dayjs');
 const QRCode = require('qrcode');
-const Database = require('better-sqlite3');
+const { openDatabase } = require('./lib/sqlite');
 const bcrypt = require('bcryptjs');
 require('dotenv').config();
 const PORT = process.env.PORT || 3000;
@@ -74,7 +74,7 @@ if (isProdEnv) {
 const dbDir = path.join(__dirname, 'db');
 if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
 const dbPath = path.join(dbDir, 'queue.db');
-const db = new Database(dbPath);
+const db = openDatabase(dbPath);
 db.pragma('journal_mode = WAL');
 try {
   db.pragma('busy_timeout = 5000');
@@ -201,7 +201,7 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '100kb' }));
 app.use(express.urlencoded({ extended: true, limit: '100kb' }));
-const SQLiteStore = require('connect-sqlite3')(session);
+const SQLiteStore = require('./lib/session-store')(session);
 const sessionStore = new SQLiteStore({
   db: 'sessions.db',
   dir: './db'
@@ -448,12 +448,23 @@ app.put('/api/agents/:id', requireAdmin, (req, res) => {
   if (!existing) return res.status(404).json({ error: 'not found' });
   if (name && isDisplayNameTaken(String(name), existing.id)) return res.status(400).json({ error: 'name already in use' });
   const hash = password ? bcrypt.hashSync(String(password), 10) : existing.password;
+  // undefined keeps the stored value; an empty string clears the field
+  const newName = name === undefined ? existing.name : (name || null);
+  const newCounter = counter === undefined ? existing.counter : (counter || null);
   const newRole = role === undefined ? existing.role : (role || null);
-  const newActive = active === undefined ? existing.active : active;
+  const newActive = active === undefined ? existing.active : (Number(active) === 1 ? 1 : 0);
+  // Clearing the name makes the account the display name, which must stay unique too
+  if (!newName && db.prepare('SELECT 1 FROM agents WHERE id IS NOT ? AND name=?').get(existing.id, existing.account)) {
+    return res.status(400).json({ error: 'name already in use' });
+  }
+  // An admin cannot demote or deactivate their own account and lock themselves out of the admin page
+  if (existing.id === req.authenticatedAgent.id && (newRole !== 'admin' || newActive !== 1)) {
+    return res.status(400).json({ error: 'cannot demote or deactivate your own account' });
+  }
   // A password reset or deactivation revokes the account's existing sessions
   const revokeSessions = Boolean(password) || Number(newActive) !== 1;
   db.prepare('UPDATE agents SET name=?, password=?, counter=?, role=?, active=?, sessionVersion=sessionVersion+?, updatedAt=? WHERE id=?')
-    .run(name || existing.name, hash, counter || existing.counter, newRole, newActive, revokeSessions ? 1 : 0, now, id);
+    .run(newName, hash, newCounter, newRole, newActive, revokeSessions ? 1 : 0, now, id);
   if (revokeSessions && existing.id === req.authenticatedAgent.id && Number(newActive) === 1) {
     // Keep the admin's current session valid after resetting their own password
     req.session.agent.sessionVersion = db.prepare('SELECT sessionVersion FROM agents WHERE id=?').get(existing.id).sessionVersion;
@@ -463,6 +474,7 @@ app.put('/api/agents/:id', requireAdmin, (req, res) => {
 });
 app.delete('/api/agents/:id', requireAdmin, (req, res) => {
   const id = req.params.id;
+  if (Number(id) === req.authenticatedAgent.id) return res.status(400).json({ error: 'cannot delete your own account' });
   db.prepare('DELETE FROM agents WHERE id=?').run(id);
   res.json({ ok: true });
 });

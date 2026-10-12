@@ -43,10 +43,37 @@
           <div class="mt-8"><button id="createBtn">建立</button></div>
         </div>
         <div class="mt-18">
-          <h3>現有帳號</h3>
+          <div class="flex-between-center">
+            <h3>現有帳號</h3>
+            <input id="agentFilter" class="filter" type="search" placeholder="搜尋帳號、姓名或櫃台" />
+          </div>
           <div id="agentsWrap">載入中…</div>
         </div>
       </div>
+      <dialog id="editDialog">
+        <form id="editForm" method="dialog">
+          <h3>編輯帳號 <span id="editAccount" class="muted"></span></h3>
+          <label for="editName">姓名</label>
+          <input id="editName" placeholder="留空則以帳號顯示" />
+          <div class="row">
+            <div><label for="editCounter">櫃台</label><input id="editCounter" placeholder="例如 A1, B2, 1號" /></div>
+            <div><label for="editRole">角色</label>
+              <select id="editRole">
+                <option value="">一般櫃員</option>
+                <option value="admin">管理員</option>
+              </select>
+            </div>
+          </div>
+          <label class="checkbox"><input id="editActive" type="checkbox" /> 啟用（停用會立即登出該帳號）</label>
+          <label for="editPassword">重設密碼（留空表示不更改）</label>
+          <input id="editPassword" type="password" placeholder="輸入新密碼" autocomplete="new-password" />
+          <p id="editSelfNote" class="muted hidden">這是你目前登入的帳號，無法變更自己的角色或停用。</p>
+          <div class="dialog-actions">
+            <button type="button" id="editCancel" class="secondary">取消</button>
+            <button type="submit" id="editSave">儲存</button>
+          </div>
+        </form>
+      </dialog>
       <div id="profileSection" class="hidden">
         <div class="mt-12">
           <h3>個人資料編輯</h3>

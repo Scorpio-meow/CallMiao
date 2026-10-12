@@ -49,38 +49,67 @@ async function getCsrfToken() {
     return null;
   }
 }
+let AGENTS = [];
+let EDITING_AGENT = null;
+function isSelf(agent) {
+  return agent.account === sessionStorage.getItem('ui_agent_account');
+}
+function makeBadge(text, cls) {
+  const span = document.createElement('span');
+  span.className = `badge ${cls}`;
+  span.textContent = text;
+  return span;
+}
+function renderAgents() {
+  const wrap = document.getElementById('agentsWrap');
+  const keyword = document.getElementById('agentFilter').value.trim().toLowerCase();
+  const rows = AGENTS.filter(a => !keyword || [a.account, a.name, a.counter].some(v => (v || '').toLowerCase().includes(keyword)));
+  if (rows.length === 0) return wrap.innerHTML = `<div class="muted">${AGENTS.length === 0 ? '無帳號' : '沒有符合的帳號'}</div>`;
+  const table = document.createElement('table');
+  const thead = document.createElement('thead');
+  thead.innerHTML = '<tr><th>帳號</th><th>姓名</th><th>櫃台</th><th>角色</th><th>狀態</th><th></th></tr>';
+  table.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  for (const a of rows) {
+    const tr = document.createElement('tr');
+    if (!a.active) tr.className = 'inactive';
+    tr.title = '點兩下編輯';
+    tr.ondblclick = () => openEditDialog(a);
+    const tdAccount = document.createElement('td'); tdAccount.textContent = a.account || '';
+    if (isSelf(a)) tdAccount.appendChild(makeBadge('你', 'self'));
+    tr.appendChild(tdAccount);
+    const tdName = document.createElement('td'); tdName.textContent = a.name || '-'; tr.appendChild(tdName);
+    const tdCounter = document.createElement('td'); tdCounter.textContent = a.counter || '-'; tr.appendChild(tdCounter);
+    const tdRole = document.createElement('td');
+    tdRole.appendChild(a.role === 'admin' ? makeBadge('管理員', 'admin') : makeBadge('一般櫃員', 'agent'));
+    tr.appendChild(tdRole);
+    const tdActive = document.createElement('td');
+    tdActive.appendChild(a.active ? makeBadge('啟用', 'on') : makeBadge('停用', 'off'));
+    tr.appendChild(tdActive);
+    const tdActions = document.createElement('td');
+    tdActions.className = 'row-actions';
+    const editBtn = document.createElement('button'); editBtn.className = 'small'; editBtn.textContent = '編輯';
+    editBtn.onclick = () => openEditDialog(a);
+    tdActions.appendChild(editBtn);
+    if (!isSelf(a)) {
+      const delBtn = document.createElement('button'); delBtn.className = 'small danger'; delBtn.textContent = '刪除';
+      delBtn.onclick = () => onDelete(a);
+      tdActions.appendChild(delBtn);
+    }
+    tr.appendChild(tdActions);
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  wrap.innerHTML = ''; wrap.appendChild(table);
+}
 async function loadAgents() {
   const wrap = document.getElementById('agentsWrap');
   try {
     const res = await apiFetch('/api/agents', { method: 'GET' });
     const data = await res.json();
     if (data.error) return wrap.textContent = `錯誤: ${data.error}`;
-    const rows = data.agents || [];
-    if (rows.length === 0) return wrap.innerHTML = '<div class="muted">無帳號</div>';
-    const table = document.createElement('table');
-    const thead = document.createElement('thead');
-    thead.innerHTML = '<tr><th>id</th><th>account</th><th>name</th><th>counter</th><th>role</th><th>active</th><th></th></tr>';
-    table.appendChild(thead);
-    const tbody = document.createElement('tbody');
-    for (const a of rows) {
-      const tr = document.createElement('tr');
-      const tdId = document.createElement('td'); tdId.textContent = String(a.id || ''); tr.appendChild(tdId);
-      const tdAccount = document.createElement('td'); tdAccount.textContent = a.account || ''; tr.appendChild(tdAccount);
-      const tdName = document.createElement('td'); tdName.textContent = a.name || ''; tr.appendChild(tdName);
-      const tdCounter = document.createElement('td'); tdCounter.textContent = a.counter || ''; tr.appendChild(tdCounter);
-      const tdRole = document.createElement('td'); tdRole.textContent = a.role || ''; tr.appendChild(tdRole);
-      const tdActive = document.createElement('td'); tdActive.textContent = a.active ? 'Y' : 'N'; tr.appendChild(tdActive);
-      const tdActions = document.createElement('td');
-      const editBtn = document.createElement('button'); editBtn.className = 'edit small'; editBtn.setAttribute('data-id', String(a.id)); editBtn.textContent = '編輯';
-      const delBtn = document.createElement('button'); delBtn.className = 'del small danger'; delBtn.setAttribute('data-id', String(a.id)); delBtn.textContent = '刪除';
-      tdActions.appendChild(editBtn); tdActions.appendChild(document.createTextNode(' ')); tdActions.appendChild(delBtn);
-      tr.appendChild(tdActions);
-      tbody.appendChild(tr);
-    }
-    table.appendChild(tbody);
-    wrap.innerHTML = ''; wrap.appendChild(table);
-    wrap.querySelectorAll('button.edit').forEach(b => b.onclick = onEdit);
-    wrap.querySelectorAll('button.del').forEach(b => b.onclick = onDelete);
+    AGENTS = data.agents || [];
+    renderAgents();
   } catch (err) { wrap.innerHTML = `<div class="muted">載入失敗</div>`; console.error(err); }
 }
 async function loadAgentProfile() {
@@ -103,21 +132,49 @@ async function loadAgentProfile() {
     showMsg('載入個人資料失敗', true);
   }
 }
-async function onEdit(e) {
-  const id = e.currentTarget.getAttribute('data-id');
-  const name = prompt('新姓名 (留空不變)');
-  const password = prompt('新密碼 (留空不變)');
-  const counter = prompt('櫃台 (留空不變)');
-  const role = prompt('角色 (admin/留空為一般櫃員)');
+function openEditDialog(agent) {
+  EDITING_AGENT = agent;
+  const self = isSelf(agent);
+  document.getElementById('editAccount').textContent = agent.account || '';
+  document.getElementById('editName').value = agent.name || '';
+  document.getElementById('editCounter').value = agent.counter || '';
+  document.getElementById('editRole').value = agent.role === 'admin' ? 'admin' : '';
+  document.getElementById('editActive').checked = Boolean(agent.active);
+  document.getElementById('editPassword').value = '';
+  document.getElementById('editRole').disabled = self;
+  document.getElementById('editActive').disabled = self;
+  document.getElementById('editSelfNote').classList.toggle('hidden', !self);
+  document.getElementById('editDialog').showModal();
+  document.getElementById('editName').focus();
+}
+function closeEditDialog() {
+  document.getElementById('editPassword').value = '';
+  document.getElementById('editDialog').close();
+  EDITING_AGENT = null;
+}
+async function saveEdit() {
+  const agent = EDITING_AGENT;
+  if (!agent) return;
+  const name = document.getElementById('editName').value.trim();
+  const counter = document.getElementById('editCounter').value.trim();
+  const role = document.getElementById('editRole').value;
+  const active = document.getElementById('editActive').checked ? 1 : 0;
+  const password = document.getElementById('editPassword').value;
+  // Send only changed fields; an empty string clears name/counter on the server
   const body = {};
-  if (name) body.name = name;
+  if (name !== (agent.name || '')) body.name = name;
+  if (counter !== (agent.counter || '')) body.counter = counter;
+  if (role !== (agent.role === 'admin' ? 'admin' : '')) body.role = role;
+  if (active !== (agent.active ? 1 : 0)) body.active = active;
   if (password) body.password = password;
-  if (counter) body.counter = counter;
-  if (role !== null) body.role = role || '';
+  if (Object.keys(body).length === 0) return closeEditDialog();
+  if (body.active === 0 && !confirm(`停用「${agent.account}」會立即登出該帳號，確定？`)) return;
+  const saveBtn = document.getElementById('editSave');
+  saveBtn.disabled = true;
   try {
     const csrfToken = await getCsrfToken();
     if (!csrfToken) return showMsg('無法取得 CSRF token', true);
-    const res = await apiFetch(`/api/agents/${id}`, {
+    const res = await apiFetch(`/api/agents/${agent.id}`, {
       method: 'PUT',
       headers: {
         'x-csrf-token': csrfToken
@@ -126,13 +183,14 @@ async function onEdit(e) {
     });
     const data = await res.json();
     if (data.error) return showMsg('修改失敗: ' + data.error, true);
-    showMsg('已修改');
+    showMsg(`已更新「${agent.account}」`);
+    closeEditDialog();
     loadAgents();
-  } catch (err) { showMsg('修改失敗', true); }
+  } catch (err) { showMsg('修改失敗', true); } finally { saveBtn.disabled = false; }
 }
-async function onDelete(e) {
-  const id = e.currentTarget.getAttribute('data-id');
-  if (!confirm('確定刪除？')) return;
+async function onDelete(agent) {
+  const id = agent.id;
+  if (!confirm(`確定刪除帳號「${agent.account}」？此動作無法復原。`)) return;
   try {
     const csrfToken = await getCsrfToken();
     if (!csrfToken) return showMsg('無法取得 CSRF token', true);
@@ -184,6 +242,10 @@ async function logout() {
   await urlManager.safeRedirect('/login/index.html');
 }
 document.getElementById('logout').onclick = logout;
+document.getElementById('agentFilter').oninput = renderAgents;
+document.getElementById('editForm').onsubmit = (e) => { e.preventDefault(); saveEdit(); };
+document.getElementById('editCancel').onclick = closeEditDialog;
+document.getElementById('editDialog').oncancel = () => { EDITING_AGENT = null; document.getElementById('editPassword').value = ''; };
 document.getElementById('createBtn').onclick = async () => {
   const account = document.getElementById('newAccount').value.trim();
   const name = document.getElementById('newName').value.trim();
