@@ -1,4 +1,4 @@
-# 數位叫號嵌入式網頁模組 (Digital Queue System)
+# 叫號喵 (CallMiao)
 
 可嵌入既有企業網站、多功能資訊站（Kiosk）的排隊取號、櫃員叫號管理、大廳多媒體動態看板系統。本系統採用輕量高效的架構設計，整合 Express 後端服務、Socket.IO 即時雙向通訊、SQLite 嵌入式資料庫與 QR Code 即時取號及查詢功能。
 
@@ -222,7 +222,7 @@ bun start
 ## 專案目錄結構
 
 ```
-CNS/
+CallMiao/
 ├── server.js                 # 主伺服器入口（Express、Socket.IO、CORS、Rate Limiting、CSRF、API 路由）
 ├── package.json              # 專案套件配置、相依性與指令腳本
 ├── .env.example              # 環境變數設定範本
@@ -437,7 +437,7 @@ server {
 bun install -g pm2
 
 # 啟動服務並指定程序名稱
-pm2 start server.js --name "digital-queue-system"
+pm2 start server.js --name "callmiao"
 
 # 儲存當前程序清單並設定開機自啟
 pm2 save
@@ -445,7 +445,7 @@ pm2 startup
 
 # 查看即時監控狀態與日誌
 pm2 status
-pm2 logs digital-queue-system
+pm2 logs callmiao
 ```
 
 ---

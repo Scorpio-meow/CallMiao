@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "digital-queue-widget",
+      "name": "callmiao",
       "dependencies": {
         "bcryptjs": "^3.0.3",
         "better-sqlite3": "^12.11.1",
