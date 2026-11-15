@@ -2,8 +2,10 @@ const params = new URLSearchParams(location.search);
 const rawId = params.get('id');
 const id = rawId && /^\d+$/.test(rawId) ? rawId : null;
 const socket = io();
+let ticket = null;
 let lastStatus = null;
 let latestOverview = null;
+let lastSignature = null;
 let loadInFlight = false;
 let loadPending = false;
 let retryTimer = null;
@@ -29,7 +31,7 @@ function beep(times = 2) {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = 'sine';
-    osc.frequency.value = 880; // A5
+    osc.frequency.value = 880;
     gain.gain.setValueAtTime(0.0001, t);
     gain.gain.linearRampToValueAtTime(0.12, t + 0.02);
     gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.30);
@@ -43,8 +45,6 @@ function triggerAlert() {
   if (!notifyEnabled) return;
   vibrate([220, 100, 220, 120, 360]);
   try {
-    if (audioCtx && audioCtx.state === 'suspended') {
-    }
     beep(3);
   } catch (_) { }
 }
@@ -79,8 +79,7 @@ const STATUS_LABEL = {
   called: '已叫號',
   serving: '服務中',
   finished: '已完成',
-  canceled: '已取消',
-  cancelled: '已取消'
+  canceled: '已取消'
 };
 function statusLabel(s) { return STATUS_LABEL[s] || (s || '-'); }
 function isActiveStatus(s) { return s === 'called' || s === 'serving'; }
@@ -93,13 +92,11 @@ function renderInfo(ticket) {
   const pCounter = document.createElement('p'); pCounter.textContent = '櫃台：' + String(ticket.counter || '-'); infoWrap.appendChild(pCounter);
   const pCreated = document.createElement('p'); pCreated.textContent = '建立：' + new Date(ticket.createdAt).toLocaleString(); infoWrap.appendChild(pCreated);
 }
-// Transient failures (e.g. rate limited) keep the last known state; retry when the server allows it
 function scheduleRetry(res) {
   const retryAfterSec = Number(res.headers.get('Retry-After'));
   if (retryTimer || !Number.isFinite(retryAfterSec) || retryAfterSec <= 0) return;
   retryTimer = setTimeout(() => { retryTimer = null; load(); }, retryAfterSec * 1000);
 }
-// Coalesce bursts of queue events into one in-flight load plus at most one follow-up
 async function load() {
   if (loadInFlight) { loadPending = true; return; }
   loadInFlight = true;
@@ -110,11 +107,31 @@ async function load() {
     if (loadPending) { loadPending = false; load(); }
   }
 }
-async function loadOnce() {
-  if (!id) {
-    document.querySelector('#info').textContent = '缺少票券 ID';
-    return;
+function signatureOf(overview) {
+  const call = overview.currentCalls.find(c => String(c.id) === id);
+  if (call) return `${call.status}|${call.serviceType}|${call.counter}`;
+  for (const [serviceType, tickets] of Object.entries(overview.waiting)) {
+    if (tickets.some(t => String(t.id) === id)) return `waiting|${serviceType}`;
   }
+  return 'closed';
+}
+function renderProgress() {
+  const progressEl = document.querySelector('#progress');
+  progressEl.textContent = '';
+  if (!ticket || !latestOverview) return;
+  const latest = latestOverview.currentCalls.find(c => c.serviceType === ticket.serviceType);
+  const pNow = document.createElement('p');
+  pNow.textContent = '目前叫號：' + (latest ? `${latest.number}${latest.counter ? `（${latest.counter}櫃台）` : ''}` : '-');
+  progressEl.appendChild(pNow);
+  const queue = latestOverview.waiting[ticket.serviceType];
+  const ahead = ticket.status === 'waiting' && queue ? queue.findIndex(t => String(t.id) === id) : -1;
+  if (ahead >= 0) {
+    const pAhead = document.createElement('p');
+    pAhead.textContent = `前面尚有：${ahead} 位`;
+    progressEl.appendChild(pAhead);
+  }
+}
+async function loadOnce() {
   const res = await fetch(`/api/ticket/${id}`);
   if (res.status === 404) {
     document.querySelector('#info').textContent = '票券不存在';
@@ -125,61 +142,44 @@ async function loadOnce() {
     scheduleRetry(res);
     return;
   }
-  const { ticket } = await res.json();
-  const prev = lastStatus;
-  const cur = ticket.status;
+  ticket = (await res.json()).ticket;
   renderInfo(ticket);
-  try {
-    const waitRes = await fetch(`/api/tickets/waiting?serviceType=${encodeURIComponent(ticket.serviceType || '')}`);
-    let overview = latestOverview;
-    if (!overview) {
-      const ovRes = await fetch('/api/overview');
-      overview = ovRes.ok ? await ovRes.json() : null;
-    }
-    const waitingData = waitRes.ok ? await waitRes.json() : { tickets: [] };
-    let nowCallingText = '-';
-    if (overview && Array.isArray(overview.currentCalls)) {
-      const latest = overview.currentCalls
-        .filter(x => x.serviceType === ticket.serviceType)
-        .sort((a, b) => new Date(b.calledAt || 0) - new Date(a.calledAt || 0))[0];
-      if (latest) {
-        nowCallingText = `${latest.number}${latest.counter ? `（${latest.counter}櫃台）` : ''}`;
-      }
-    }
-    let aheadText = '';
-    if (ticket.status === 'waiting') {
-      const mineTime = new Date(ticket.createdAt).getTime();
-      const list = Array.isArray(waitingData.tickets) ? waitingData.tickets : [];
-      const ahead = list.filter(t => new Date(t.createdAt).getTime() < mineTime).length;
-      aheadText = `前面尚有：${ahead} 位`;
-    } else {
-      aheadText = '';
-    }
-    const progressEl = document.querySelector('#progress');
-    if (progressEl) {
-      progressEl.textContent = '';
-      const pNow = document.createElement('p'); pNow.textContent = '目前叫號：' + nowCallingText; progressEl.appendChild(pNow);
-      if (aheadText) { const pAhead = document.createElement('p'); pAhead.textContent = aheadText; progressEl.appendChild(pAhead); }
-    }
-  } catch (e) {
-    document.querySelector('#progress').textContent = '';
-  }
-  if (prev && prev !== cur && isActiveStatus(cur)) {
-    triggerAlert();
-  }
-  lastStatus = cur;
+  renderProgress();
+  if (lastStatus && lastStatus !== ticket.status && isActiveStatus(ticket.status)) triggerAlert();
+  lastStatus = ticket.status;
 }
-socket.on('queue:update', (payload) => {
-  if (payload && payload.overview) latestOverview = payload.overview;
+function applyOverview(overview) {
+  latestOverview = overview;
+  const signature = signatureOf(overview);
+  if (signature === lastSignature) {
+    renderProgress();
+    return;
+  }
+  lastSignature = signature;
   load();
-});
-socket.on('call:made', (data) => {
-  const t = data && data.ticket;
-  if (!t || !id || String(t.id) !== String(id)) return;
-  // Render and alert from the pushed ticket so a failed or rate-limited reload cannot suppress the call
-  renderInfo(t);
-  if (isActiveStatus(t.status)) triggerAlert();
-  lastStatus = t.status;
-});
-setupNotifyUI();
-load();
+}
+async function init() {
+  setupNotifyUI();
+  if (!id) {
+    document.querySelector('#info').textContent = '缺少票券 ID';
+    return;
+  }
+  socket.on('queue:update', (payload) => applyOverview(payload.overview));
+  socket.on('call:made', (data) => {
+    const t = data.ticket;
+    if (String(t.id) !== id) return;
+    ticket = t;
+    renderInfo(t);
+    renderProgress();
+    if (isActiveStatus(t.status)) triggerAlert();
+    lastStatus = t.status;
+  });
+  const res = await fetch('/api/overview');
+  const fetched = res.ok ? await res.json() : null;
+  if (fetched && !latestOverview) {
+    latestOverview = fetched;
+    lastSignature = signatureOf(latestOverview);
+  }
+  load();
+}
+init();

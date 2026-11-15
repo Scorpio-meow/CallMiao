@@ -1,6 +1,7 @@
-node_modules
+.codegraph/
+node_modules/
 package-lock.json
-db
+db/
 .env
 .env.*
 !.env.example

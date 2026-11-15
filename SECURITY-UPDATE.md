@@ -16,7 +16,6 @@
   - [5. 相依套件安全性與 Cookie 加固 (Dependency Hardening)](#5-相依套件安全性與-cookie-加固-dependency-hardening)
   - [6. 環境變數驗證與機密資料保護 (Environment Security)](#6-環境變數驗證與機密資料保護-environment-security)
 - [安全驗證與測試指南](#安全驗證與測試指南)
-- [前端安全工具庫參考](#前端安全工具庫參考)
 - [生產環境部署安全檢查清單](#生產環境部署安全檢查清單)
 - [安全漏洞通報流程](#安全漏洞通報流程)
 - [安全性更新日誌](#安全性更新日誌)
@@ -32,10 +31,12 @@
 |----------|----------------|----------------|----------|
 | **請求來源驗證** | CSRF Token 綁定伺服器端 Session（Synchronizer Token） | `server.js`, `express-session` | 跨站請求偽造攻擊 (CSRF) |
 | **頻率控制** | 路由分級速率限制 | `express-rate-limit` | 暴力破解、DoS 阻斷服務、惡意洗票 |
-| **內容渲染** | DOM API + textContent 構建 | 前端全模組、`input-validator.js` | 儲存型與反射型 XSS 攻擊 |
-| **跳轉控制** | 協定校驗與網域白名單過濾 | `public/utils/url-manager.js` | 開放式重定向 (Open Redirect)、DOM XSS |
-| **跨域安全** | 智慧 CORS 動態比對 | `cors` | 非法跨域竊取資料、惡意請求 |
-| **傳輸與標頭** | 安全 HTTP Header | `helmet` | 點擊劫持 (Clickjacking)、MIME 嗅探 |
+| **內容渲染** | DOM API + textContent 構建 | 前端全模組 | 儲存型與反射型 XSS 攻擊 |
+| **跳轉控制** | 登入後只允許跳轉到同源路徑 | `public/login/index.js` | 開放式重定向 (Open Redirect)、DOM XSS |
+| **跨域安全** | 同主機、`PUBLIC_ORIGIN` 與 `ALLOWED_ORIGINS` 以外一律 403 | `cors`、Socket.IO `allowRequest` | 非法跨域竊取資料、惡意請求 |
+| **傳輸與標頭** | 安全 HTTP Header；只有 `/kiosk/` 可被 `ALLOWED_ORIGINS` 嵌入 | `helmet` | 點擊劫持 (Clickjacking)、MIME 嗅探 |
+| **票券授權** | 已叫號／服務中的票只能由該櫃台或管理員操作 | `server.js` | 櫃員誤操作或冒用他櫃台 |
+| **佇列准入** | 每服務別上限 + 每來源 IP 上限 | `server.js` | 單一來源塞滿佇列 |
 | **認證防護** | 圖形驗證碼 + 密碼 bcrypt 雜湊 | `svg-captcha`, `sharp`, `bcryptjs` | 自動化腳本暴破、憑證填充攻擊 |
 | **機密安全** | .env 嚴格排除與權限管控 | `.gitignore`, SQLite 權限 | 憑證外洩、原始碼機密暴露 |
 
@@ -79,23 +80,21 @@ flowchart TD
 系統依據 API 端點的敏感度與使用情境，實施分級速率限制：
 
 - **取號頻率限制 (`ticketCreationLimiter`)**：限制單一 IP 短時間內的取號次數，防止惡意腳本大量消耗號碼流水號。
+- **取號數量上限**：每個服務別最多 `MAX_WAITING_PER_SERVICE` 張等候票，每個來源網路最多 `MAX_WAITING_PER_CLIENT` 張（IPv4 以單一位址、IPv6 以 /56 網段計算，避免輪換 IPv6 位址繞過）；`KIOSK_IPS` 列出的 IP 不受來源上限限制。來源以 `SESSION_SECRET` 做 HMAC 後存放，不保存原始 IP。
 - **公開讀取限制 (`publicReadLimiter`)**：限制大廳看板與查詢 API 的請求頻率，降低伺服器負載。
 - **管理與認證限制 (`adminAgentLimiter`, `loginLimiter`)**：針對登入與管理端點施加嚴格的嘗試次數限制，防範暴力破解。
 
 ### 3. 跨站腳本攻擊防護與 DOM 安全 (XSS & DOM Sanitization)
 
-- **前端渲染安全**：全面重構管理後台（`agents.html`）、櫃員端（`agent.js`）與票券查詢頁（`ticket.js`），移除動態拼接 `innerHTML` 的作法，全面改用原生 `document.createElement()` 與 `element.textContent` 進行節點建構與賦值。
-- **輸入清理工具庫 (`input-validator.js`)**：提供字串實體編碼、帳號/姓名白名單字元過濾與長度校驗。
+- **前端渲染安全**：管理後台、櫃員端、取號機、大廳與票券查詢頁都以 `document.createElement()` 與 `element.textContent` 建構畫面，不拼接使用者資料到 `innerHTML`。
 
 ### 4. 智慧 CORS 來源校驗與安全跳轉 (CORS & URL Safety)
 
 - **自動化跨域判斷**：
-  - 開發模式（`NODE_ENV=development`）下只自動放行 `http://localhost:PORT`；其他本機連接埠須列入 `ALLOWED_ORIGINS`，因為 session cookie 由同一主機的所有連接埠共用。
-  - 生產模式（`NODE_ENV=production`）下嚴格比對 `.env` 中設定之 `ALLOWED_ORIGINS`，拒絕任何非信任來源並記錄審計日誌。
-- **URL 跳轉防護 (`url-manager.js`)**：
-  - 封鎖 Protocol-relative URL（例如 `//attacker.com`）。
-  - 僅允許標準 `http:` 與 `https:` 協定。
-  - 針對非同源或非白名單跳轉實施攔截與降級回首頁保護。
+  - 與伺服器同主機的來源（Origin 的主機等於請求的 Host）、`PUBLIC_ORIGIN` 與 `ALLOWED_ORIGINS` 放行；開發模式另放行 `http://localhost:PORT`。其他本機連接埠須列入 `ALLOWED_ORIGINS`，因為 session cookie 由同一主機的所有連接埠共用。
+  - 其他來源的 HTTP 請求回傳 `403` 並記錄日誌，Socket.IO 連線也以相同規則拒絕。
+- **嵌入控制**：`/kiosk/` 頁面的 `frame-ancestors` 為 `'self'` 加上 `ALLOWED_ORIGINS`；其他頁面維持 `frame-ancestors 'self'` 與 `X-Frame-Options: SAMEORIGIN`。
+- **登入跳轉防護**：`redirect` 參數以 `new URL()` 解析，只有與登入頁同源時才跳轉，其餘（`//attacker.com`、`/\attacker.com`、`javascript:`）一律改回櫃員首頁。
 
 ### 5. 相依套件安全性與 Cookie 加固 (Dependency Hardening)
 
@@ -104,8 +103,8 @@ flowchart TD
 
 ### 6. 環境變數驗證與機密資料保護 (Environment Security)
 
-- **啟動前檢查**：伺服器啟動時會主動驗證環境配置；任何環境未設定 `SESSION_SECRET`、`SERVICE_TYPES` 或 `MAX_WAITING_PER_SERVICE`，或生產環境未設定 `ALLOWED_ORIGINS`、`TRUST_PROXY`、`PUBLIC_ORIGIN`，伺服器將立即終止啟動以防暴露於危險中。
-- **版本控制隔離**：`.gitignore` 預設排除 `.env`、`*.db`、`*.sqlite` 以及日誌檔案，確保敏感憑證不流入版本控制系統。
+- **啟動前檢查**：伺服器啟動時會主動驗證環境配置；任何環境未設定 `SESSION_SECRET`、有效的 `TZ`、`SERVICE_TYPES`、各服務的 `SERVICE_NAME_*`／`SERVICE_DESC_*`、`MAX_WAITING_PER_SERVICE`、`MAX_WAITING_PER_CLIENT`、`KIOSK_IPS` 或 `DB_DIR`，或生產環境未設定 `ALLOWED_ORIGINS`、`TRUST_PROXY`、`PUBLIC_ORIGIN`，伺服器將立即終止啟動以防暴露於危險中。
+- **版本控制隔離**：`.gitignore` 預設排除 `.env`、`.env.*`（保留 `.env.example`）、`*.db*`、`*.sqlite*`、`*.cookie` 以及日誌檔案；`DB_DIR` 指到專案內其他目錄時，資料庫檔案仍不會被追蹤。
 
 ---
 
@@ -120,7 +119,15 @@ flowchart TD
 bun pm audit
 ```
 
-### 2. 本地開發與 CSRF 功能驗證
+### 2. 執行整合測試
+
+整合測試會以暫存資料庫啟動伺服器，檢查票券狀態機、櫃台授權、Session 撤銷、驗證碼一次性、每來源取號上限、跨來源拒絕與嵌入標頭：
+
+```powershell
+bun test
+```
+
+### 3. 本地開發與 CSRF 功能驗證
 
 啟動本地服務：
 ```powershell
@@ -136,40 +143,6 @@ Write-Host "取得 CSRF Token: $token"
 
 # 2. 攜帶 Token 進行合法請求
 Invoke-RestMethod -Uri "http://localhost:3000/api/agents" -Method Get -WebSession $session
-```
-
----
-
-## 前端安全工具庫參考
-
-### `public/utils/input-validator.js`
-
-提供前端介面常用的輸入清理與驗證方法：
-
-```javascript
-// 引入方式
-<script src="/utils/input-validator.js"></script>
-
-// HTML 實體編碼（防範 XSS）
-const safeText = InputValidator.escapeHtml(rawUserInput);
-
-// 帳號格式過濾（僅允許英數字元與常用符號）
-const cleanAccount = InputValidator.sanitizeAccount(accountInput);
-
-// 姓名格式過濾
-const cleanName = InputValidator.sanitizeName(nameInput);
-```
-
-### `public/utils/url-manager.js`
-
-提供安全的 URL 導航與驗證功能：
-
-```javascript
-// 引入方式
-<script src="/utils/url-manager.js"></script>
-
-// 驗證並安全跳轉
-UrlManager.safeRedirect(targetUrl, fallbackUrl);
 ```
 
 ---
@@ -203,6 +176,16 @@ UrlManager.safeRedirect(targetUrl, fallbackUrl);
 ---
 
 ## 安全性更新日誌
+
+### 2026-11-15 (稽核後修補)
+- 已叫號／服務中的票只能由該櫃台或管理員結束、取消、重叫、轉櫃或改為服務中；指定叫號不能再搶走別櫃台的票。
+- 匿名取號新增每來源網路的等候票上限（`MAX_WAITING_PER_CLIENT`，IPv6 以 /56 計算），單一來源無法再把服務別塞滿。
+- 前一天未結束的已叫號、服務中票券與等候票一起自動作廢。
+- 跨來源拒絕改回 `403`；伺服器自己的主機與 `PUBLIC_ORIGIN` 自動放行。
+- 只有 `/kiosk/` 可被 `ALLOWED_ORIGINS` 嵌入，修正 iframe 嵌入功能。
+- 驗證碼一律以 PNG 輸出，移除 sharp 失敗時退回 SVG 的路徑；bcrypt 改用非同步版本。
+- `/api/qrcode` 只為既有票券產生 QR Code，不再是開放的文字轉 QR 服務。
+- 移除未使用的 `auth-checker.js`、`input-validator.js`、`url-manager.js`，登入跳轉改為只允許同源路徑。
 
 ### 2025-11-27 (安全性加固更新)
 - 導入 CSRF Token 驗證機制，加固所有管理員與櫃員狀態變更端點。

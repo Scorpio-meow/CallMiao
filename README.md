@@ -26,11 +26,11 @@
 
 本系統模組化設計完備，提供完整的排隊叫號全流程解決方案：
 
-- **客戶端取號小工具 (Kiosk / Widget)**：提供訪客觸控取號介面，支援 iframe 嵌入既有網站，並能動態生成票券 QR Code 供行動裝置掃描追蹤。
+- **客戶端取號小工具 (Kiosk / Widget)**：提供訪客觸控取號介面，支援 iframe 嵌入既有網站（嵌入網站須列入 `ALLOWED_ORIGINS`），並能動態生成票券 QR Code 供行動裝置掃描追蹤。服務卡片由 `.env` 的服務設定產生。
 - **櫃員端操作介面 (Agent Dashboard)**：具備櫃台登入認證、順序叫號、特定叫號、重新呼叫、標記服務中、完成服務、取消票券、櫃台與業務轉移等完整業務操作。
 - **大廳顯示看板 (Lobby Display)**：支援大螢幕即時動態跳號顯示、多櫃台狀態輪播、歷史叫號紀錄，以及瀏覽器 Web Speech API 語音合成廣播播報。
 - **顧客行動進度追蹤 (Mobile Ticket)**：顧客可透過手機掃描票券 QR Code 隨時查看前方等候人數與叫號進度，減少現場群聚。
-- **統一認證與圖形驗證碼 (Login & Captcha)**：具備防暴力破解之圖形驗證碼機制（支援 Sharp 高性能點陣圖生成與 SVG 向量圖降級方案）。
+- **統一認證與圖形驗證碼 (Login & Captcha)**：具備防暴力破解之圖形驗證碼機制，以 Sharp 轉成 PNG 點陣圖輸出。
 - **權限與櫃員管理介面 (Admin Console)**：管理員專屬後台，提供櫃員帳號建立、資料修改、密碼重設、啟用狀態切換與固定櫃台號綁定。
 - **企業級安全防護機制 (Enterprise Security)**：全面實作 CSRF Token 驗證、分級速率限制（Rate Limiting）、DOM XSS 安全過濾、CORS 來源校驗與 HTTP 安全標頭（Helmet）。
 
@@ -56,7 +56,7 @@ sequenceDiagram
     Server-)Lobby: WebSocket 廣播 queue:update
 
     Agent->>Server: POST /api/agent/callNext
-    Server->>DB: 更新票券狀態為 calling，記錄櫃台號與叫號時間
+    Server->>DB: 更新票券狀態為 called，記錄櫃台號與叫號時間
     DB-->>Server: 更新完成
     Server-->>Agent: 回傳被叫號票券資料
     Server-)Lobby: WebSocket 廣播 call:made (觸發看板更新與語音播報)
@@ -78,16 +78,16 @@ sequenceDiagram
     participant Session as Session / Cookie 儲存
 
     Admin->>Server: GET /api/csrf
-    Server->>Session: 簽署並設定 CSRF Secret Cookie
+    Server->>Session: 產生 Token 並存入伺服器端 Session
     Server-->>Admin: 回傳 JSON: { "csrfToken": "TOKEN_STRING" }
     
     Note over Admin,Server: 發送修改型操作 (POST / PUT / DELETE)
     Admin->>Server: POST /api/agents (Header 夾帶 x-csrf-token)
-    Server->>Server: 驗證 Request Header Token 與 Cookie Secret
+    Server->>Server: 比對 Header Token 與 Session 內的 Token
     alt 驗證通過
         Server-->>Admin: 執行管理操作並回傳 200 OK
     else 驗證失敗 / 缺少 Token
-        Server-->>Admin: 拒絕請求，回傳 403 Forbidden (EBADCSRFTOKEN)
+        Server-->>Admin: 拒絕請求，回傳 403 { "error": "invalid csrf token" }
     end
 ```
 
@@ -121,26 +121,47 @@ Copy-Item .env.example .env
 notepad .env
 ```
 
+**服務別設定（所有環境皆必填）：** 每個服務代碼都要有名稱與說明，取號機卡片、櫃員端類別清單與轉櫃選項都從這裡產生。
+```env
+SERVICE_TYPES=A,B,C,D,E
+SERVICE_NAME_A=一般保險服務
+SERVICE_DESC_A=契約異動申請、解約、滿期給付…
+SERVICE_NAME_B=理賠送件服務
+SERVICE_DESC_B=理賠送件
+SERVICE_NAME_C=保單借款服務
+SERVICE_DESC_C=保險單借款
+SERVICE_NAME_D=繳費服務
+SERVICE_DESC_D=繳交保險費、還款
+SERVICE_NAME_E=人生設計所保險諮詢
+SERVICE_DESC_E=生涯規劃 / 商品諮詢（醫療、壽險等）
+```
+
 **開發環境範例配置：**
 ```env
 PORT=3000
 NODE_ENV=development
+TZ=Asia/Taipei
 SESSION_SECRET=請設定隨機強密碼字串（至少32字元）
-SERVICE_TYPES=A,B,C,D,E
+DB_DIR=db
 MAX_WAITING_PER_SERVICE=200
-# 開發模式下系統會自動允許 http://localhost:PORT；其他本機連接埠（例如前端開發伺服器）須列入 ALLOWED_ORIGINS
+MAX_WAITING_PER_CLIENT=3
+KIOSK_IPS=
+# 開發模式下系統會自動允許 http://localhost:PORT 與「與伺服器同主機」的來源（例如 --host 模式下的區網 IP）
 ```
 
 **正式生產環境（或搭配反向代理 / DevTunnel）範例配置：**
 ```env
 PORT=3000
 NODE_ENV=production
+TZ=Asia/Taipei
 SESSION_SECRET=請設定隨機強密碼字串（至少32字元）
-ALLOWED_ORIGINS=https://queue.yourcompany.com,https://your-tunnel-id.devtunnels.ms
+DB_DIR=db
+ALLOWED_ORIGINS=https://www.yourcompany.com,https://your-tunnel-id.devtunnels.ms
 PUBLIC_ORIGIN=https://queue.yourcompany.com
 TRUST_PROXY=1
-SERVICE_TYPES=A,B,C,D,E
 MAX_WAITING_PER_SERVICE=200
+MAX_WAITING_PER_CLIENT=3
+KIOSK_IPS=203.0.113.10
 ```
 
 ### 4. 初始化管理員帳號
@@ -177,6 +198,11 @@ bun run dev
 bun start
 ```
 
+**執行整合測試（以暫存資料庫啟動伺服器，不會動到 `DB_DIR`）：**
+```powershell
+bun test
+```
+
 ### 6. 前端端點訪問一覽
 
 | 模組名稱 | 本地訪問 URL (預設埠 3000) | 說明 |
@@ -200,22 +226,28 @@ bun start
 |----------|--------|--------|------|
 | `PORT` | 選填 | `3000` | HTTP 伺服器監聽的連接埠。 |
 | `NODE_ENV` | 選填 | `development` | 運作環境模式。可設定為 `development` 或 `production`。 |
+| `TZ` | 必要 | 無 | 營業時區（IANA 名稱，例如 `Asia/Taipei`）。票號每天重新編號、前一天未結束的票自動作廢，都以這個時區的午夜為準；伺服器本身用 UTC 時也不受影響。未設定或名稱無效時拒絕啟動。 |
 | `SESSION_SECRET` | 必要 | 無 | Session 加密密鑰。未設定時系統將拒絕啟動（所有環境皆同）。 |
-| `ALLOWED_ORIGINS` | 生產環境必要 | 無 | 允許跨來源資源共用 (CORS) 的來源清單。多個來源請以逗號 `,` 分隔，結尾請勿包含斜線 `/`。 |
-| `PUBLIC_ORIGIN` | 生產環境必要 | 無 | 外部公開訪問的基礎 URL，系統生成票券 QR Code 與重定向連結時使用。開發環境未設定時由請求的 Host 推導。 |
-| `SERVICE_TYPES` | 必要 | 無 | 允許的業務類別代碼（逗號分隔，例如 `A,B,C,D,E`），須與取號機與櫃員介面的服務卡一致。取號、叫號、轉櫃等 API 只接受清單內代碼；未設定時系統將拒絕啟動。 |
+| `ALLOWED_ORIGINS` | 生產環境必要 | 無 | 允許跨來源資源共用 (CORS) 的來源清單，也是唯一可以用 iframe 嵌入取號頁（`/kiosk/`）的網站。多個來源請以逗號 `,` 分隔，結尾請勿包含斜線 `/`。`PUBLIC_ORIGIN` 會自動加入。 |
+| `PUBLIC_ORIGIN` | 生產環境必要 | 無 | 外部公開訪問的基礎 URL，系統生成票券連結與 QR Code 時使用。開發環境未設定時由請求的 Host 推導。 |
+| `SERVICE_TYPES` | 必要 | 無 | 允許的業務類別代碼（逗號分隔的英數字，例如 `A,B,C,D,E`）。取號、叫號、轉櫃等 API 只接受清單內代碼；未設定時系統將拒絕啟動。 |
+| `SERVICE_NAME_<代碼>`／`SERVICE_DESC_<代碼>` | 必要 | 無 | 每個服務代碼的顯示名稱與說明，取號機與櫃員端都由此產生畫面；缺任何一個時系統將拒絕啟動。 |
 | `MAX_WAITING_PER_SERVICE` | 必要 | 無 | 每個業務類別允許的待叫（waiting）票券上限，須為正整數。達到上限時匿名取號回 429，櫃員代客取號不受限制；未設定時系統將拒絕啟動。 |
+| `MAX_WAITING_PER_CLIENT` | 必要 | 無 | 同一個來源網路透過匿名取號可同時持有的待叫票券上限，須為正整數，防止單一來源把佇列塞滿；未設定時系統將拒絕啟動。IPv4 以單一位址計算，IPv6 以同一個 /56 網段計算。店內 Wi-Fi、電信 CGNAT 等共用對外 IP 的客人會共用這個上限，請依「同一個 IP 背後最多幾位客人同時排隊」設定。 |
+| `KIOSK_IPS` | 必要（可留空） | 無 | 不受 `MAX_WAITING_PER_CLIENT` 限制的 IP（逗號分隔），例如實體取號機，或雲端部署時分行 Wi-Fi 的對外 IP。反向代理後方請填經 `TRUST_PROXY` 解析後的來源 IP。 |
+| `DB_DIR` | 必要 | 無 | `queue.db` 與 `sessions.db` 的目錄，可填相對專案根目錄的路徑（例如 `db`）或絕對路徑。 |
 | `TRUST_PROXY` | 生產環境必要 | 無（不信任代理） | 反向代理信任設定：代理層數（如單層 Nginx 填 `1`）、直接對外服務填 `false`，或以逗號分隔的代理 IP／網段。只有受信任的代理可設定 `X-Forwarded-*`（影響速率限制的來源 IP 與公開網址推導）。 |
 
 ### 智慧 CORS 存取控制規則
 
 | 請求來源類型 | 開發模式 (development) | 生產模式 (production) |
 |--------------|-----------------------|-----------------------|
-| **無 Origin 標頭請求**（如同源頁面、伺服器端腳本、curl） | 允許存取 | 允許存取 |
-| **本機同埠來源** (`http://localhost:當前PORT`) | 自動允許 | 自動允許 |
-| **本機異埠來源** (`http://localhost:其他PORT`、`127.0.0.1`) | 須列入 ALLOWED_ORIGINS | 拒絕存取（記錄安全日誌） |
-| **符合 ALLOWED_ORIGINS 白名單之網域** | 允許存取 | 允許存取 |
-| **非白名單之外部網域** | 拒絕存取 | 拒絕存取（記錄安全日誌） |
+| **無 Origin 標頭請求**（如伺服器端腳本、curl） | 允許存取 | 允許存取 |
+| **同主機來源**（Origin 的主機與請求的 Host 相同，例如區網 IP、正式網域） | 自動允許 | 自動允許 |
+| **`http://localhost:當前PORT`** | 自動允許 | 依同主機規則 |
+| **本機異埠來源** (`http://localhost:其他PORT`、`127.0.0.1`) | 須列入 ALLOWED_ORIGINS | 須列入 ALLOWED_ORIGINS |
+| **符合 ALLOWED_ORIGINS 白名單或 PUBLIC_ORIGIN 之網域** | 允許存取 | 允許存取 |
+| **非白名單之外部網域** | 回傳 403（記錄安全日誌） | 回傳 403（記錄安全日誌） |
 
 ---
 
@@ -227,34 +259,47 @@ CallMiao/
 ├── package.json              # 專案套件配置、相依性與指令腳本
 ├── .env.example              # 環境變數設定範本
 ├── .gitignore                # Git 版本控制忽略清單（已排除 .env 與 SQLite 資料庫）
-├── db/                       # 資料庫儲存目錄
-│   └── queue.db              # SQLite 嵌入式資料庫（啟動時自動建立）
+├── lib/
+│   ├── sqlite.js             # 依執行環境選用 better-sqlite3 或 bun:sqlite
+│   └── session-store.js      # express-session 的 SQLite store
+├── test/
+│   └── server.test.js        # 整合測試（bun test）
+├── db/                       # 預設資料庫目錄（由 DB_DIR 指定）
+│   ├── queue.db              # 票券、流水號與帳號（啟動時自動建立）
+│   └── sessions.db           # 登入 Session
 └── public/                   # 前端純靜態資源目錄
     ├── admin/                # 管理員控制台
-    │   └── agents.html       # 櫃員帳號維護與櫃台綁定頁面
+    │   ├── agents.html       # 櫃員帳號維護與櫃台綁定頁面
+    │   └── agents.js
     ├── agent/                # 櫃員端操作介面
     │   ├── index.html        # 櫃員叫號工作台
-    │   ├── agent.css         # 櫃員工作台樣式
-    │   └── agent.js          # 櫃員工作台互動與 WebSocket 邏輯
+    │   └── index.js          # 櫃員工作台互動與 WebSocket 邏輯
     ├── kiosk/                # 取號端介面
     │   ├── index.html        # 觸控取號小工具
-    │   ├── kiosk.css         # 取號介面樣式
-    │   └── kiosk.js          # 取號與票券列印/QR Code 生成邏輯
+    │   ├── index.js          # 依服務設定產生卡片、取號與 QR Code
+    │   └── widget.js         # 在其他網站嵌入取號 iframe
     ├── lobby/                # 大廳看板介面
     │   ├── index.html        # 大螢幕跳號看板
-    │   ├── lobby.css         # 看板視覺樣式
-    │   └── lobby.js          # 即時跳號動畫與語音播報邏輯
+    │   └── index.js          # 即時跳號與語音播報
     ├── login/                # 統一登入模組
     │   ├── index.html        # 登入頁面（含 Captcha 驗證碼元件）
-    │   └── login.js          # 登入認證請求與錯誤處理
-    ├── ticket/               # 顧客端行動追蹤模組
-    │   ├── index.html        # 票券進度即時查詢頁面
-    │   └── ticket.js         # 票券狀態輪詢與 DOM 安全渲染
-    └── utils/                # 前端共用核心工具庫
-        ├── auth-checker.js   # 登入狀態校驗與跳轉守衛
-        ├── input-validator.js# 前端輸入清理、防 XSS 與資料格式驗證
-        └── url-manager.js    # 安全 URL 跳轉白名單與 Protocol 檢驗
+    │   └── index.js          # 登入請求與同源跳轉
+    └── ticket/               # 顧客端行動追蹤模組
+        ├── index.html        # 票券進度即時查詢頁面
+        └── index.js          # 依推播計算前方人數，只在自己票券變動時查詢
 ```
+
+### 在其他網站嵌入取號頁
+
+把嵌入網站的來源加入 `ALLOWED_ORIGINS`，再於該網站載入：
+
+```html
+<div id="queue"></div>
+<script src="https://queue.yourcompany.com/kiosk/widget.js"></script>
+<script>initQueueWidget({ target: '#queue' });</script>
+```
+
+只有 `/kiosk/` 頁面允許被 `ALLOWED_ORIGINS` 內的網站嵌入，其他頁面仍只允許同源嵌入。
 
 ---
 
@@ -264,13 +309,14 @@ CallMiao/
 
 1. **獲取 Token**：登入後，客戶端在發送非安全 HTTP 方法（`POST`、`PUT`、`DELETE`）前，需先發送 `GET /api/csrf` 請求。Token 綁定於伺服器端 Session，並於 Response Body 回傳 `{ "csrfToken": "..." }`。
 2. **夾帶標頭**：後續發送修改請求時，必須在 HTTP Request Header 中夾帶 `x-csrf-token: <csrfToken>`。
-3. **豁免端點**：僅 `POST /api/login`、`POST /api/tickets`（匿名取號）與驗證碼端點不需 Token；其餘狀態變更請求一律驗證。
+3. **豁免端點**：僅 `POST /api/login` 與 `POST /api/tickets`（匿名取號）不需 Token；其餘狀態變更請求一律驗證。
 
 ### 櫃台號（Counter）綁定規則
 
 - 櫃台號由管理員在後台（`/admin/agents.html`）建立或編輯櫃員時指定。
 - 櫃員登入系統後，系統將自動載入其所屬的櫃台號碼。
 - 櫃員操作介面上的櫃台號欄位為**唯讀 (Read-only)**，防止櫃員誤改或冒用他人櫃台叫號。
+- 已叫號或服務中的票只能由該櫃台的櫃員（或管理員）結束、取消、重叫、轉櫃或改為服務中，其他櫃員操作會回傳 `403`。
 
 ---
 
@@ -281,21 +327,20 @@ CallMiao/
 | 方法 | 路徑 | 參數說明 | 描述 |
 |------|------|----------|------|
 | `GET` | `/api/health` | 無 | 伺服器健康狀態檢查。 |
-| `POST` | `/api/tickets` | Body: `{ "serviceType": "A" }` | 訪客取號，建立新排隊票券。 |
-| `GET` | `/api/tickets/waiting` | Query: `?serviceType=A`（選填） | 取得指定業務類別之目前等待清單；省略時回傳所有已設定類別。 |
+| `GET` | `/api/config` | 無 | 取得服務別清單 `{ services: [{ code, name, description }] }`。 |
+| `POST` | `/api/tickets` | Body: `{ "serviceType": "A" }` | 訪客取號，回傳 `{ ticket, ticketUrl }`。受 `MAX_WAITING_PER_SERVICE` 與 `MAX_WAITING_PER_CLIENT` 限制，超過回 429。 |
 | `GET` | `/api/ticket/:id` | Path: `id` (票券 ID) | 查詢指定單筆票券目前狀態與進度。 |
-| `GET` | `/api/overview` | 無 | 取得全系統叫號現況、各櫃台狀態與等候人數。 |
-| `GET` | `/api/qrcode` | Query: `?text=https://...` | 生成指定文字之 PNG 格式二維碼圖片。 |
+| `GET` | `/api/overview` | 無 | 取得 `{ summary, waiting, currentCalls }`：各服務等候人數、各服務等候順序與目前叫號。 |
+| `GET` | `/api/qrcode/:ticketId` | Path: `ticketId` | 產生該票券追蹤網址的 PNG 格式 QR Code。 |
 
 ### 2. 認證與驗證碼 (Auth & Captcha)
 
 | 方法 | 路徑 | 參數說明 | 描述 |
 |------|------|----------|------|
 | `GET` | `/api/captcha/new` | 無 | 建立一組 Captcha 驗證 Token（回傳 `{ token, expiresAt }`）。 |
-| `GET` | `/api/captcha/image/:token` | Path: `token` | 取得對應 Token 之圖形驗證碼圖片（優先回傳 PNG，降級回傳 SVG）。 |
-| `POST` | `/api/login` | Body: `{ "account", "password", "captchaToken", "captchaText" }` | 櫃員/管理員登入並建立 Session。 |
+| `GET` | `/api/captcha/image/:token` | Path: `token` | 取得對應 Token 之圖形驗證碼 PNG 圖片。 |
+| `POST` | `/api/login` | Body: `{ "account", "password", "captchaToken", "captcha" }` | 櫃員/管理員登入並建立 Session。 |
 | `POST` | `/api/logout` | 無 | 登出並銷毀當前 Session。 |
-| `GET` | `/api/me` | 無 | 取得目前登入使用者的身分與櫃台綁定資訊。 |
 | `GET` | `/api/csrf` | 無 | 取得 CSRF 防護 Token（回傳 `{ csrfToken }`）。 |
 
 ### 3. 櫃員操作端點 (Agent Operations - 需登入 Session)
@@ -307,13 +352,16 @@ CallMiao/
 | `POST` | `/api/agent/markServing` | Body: `{ "ticketId": 10 }` | 將票券狀態標記為「服務中 (serving)」。 |
 | `POST` | `/api/agent/finish` | Body: `{ "ticketId": 10, "result": "處理完成" }` | 標記票券服務結束 (finished)。 |
 | `POST` | `/api/agent/recall` | Body: `{ "ticketId": 10 }` | 重新廣播呼叫當前票券。 |
-| `POST` | `/api/agent/cancel` | Body: `{ "ticketId": 10, "reason": "過號未到" }` | 取消票券 (cancelled)。 |
-| `POST` | `/api/agent/transfer` | Body: `{ "ticketId", "toServiceType", "toCounter" }` | 票券轉櫃或轉換業務服務別。`toCounter` 須為某個啟用帳號被指派的櫃台號。 |
+| `POST` | `/api/agent/cancel` | Body: `{ "ticketId": 10, "reason": "過號未到" }` | 取消票券 (canceled)。 |
+| `POST` | `/api/agent/transfer` | Body: `{ "ticketId", "toServiceType", "toCounter", "keepStatus" }` | 票券轉櫃或轉換業務服務別。`keepStatus: false` 會把票放回等候；`toCounter` 只能用在 `keepStatus: true` 且已叫號或服務中的票，並須為某個啟用帳號被指派的櫃台號。 |
 | `POST` | `/api/agent/createTicket` | Body: `{ "serviceType": "A" }` | 櫃員代客取號。 |
 | `GET` | `/api/agent/history` | Query: `?serviceType=A&limit=50` | 查詢已完成或歷史叫號明細。`limit` 須為正整數，上限 500。 |
 | `GET` | `/api/agent/ticket/:id` | Path: `id` | 查詢單筆票券之內部完整詳細欄位。 |
+| `GET` | `/api/agent/profile` | 無 | 取得目前登入帳號的資料與櫃台。 |
+| `PUT` | `/api/agent/profile` | Body: `{ "name", "password", "currentPassword" }` | 修改自己的姓名或密碼；改密碼須提供目前密碼。 |
+| `POST` | `/api/agent/message` | Body: `{ "text", "toCounter" \| "toAgent" }` | 傳訊息給某櫃台、某位櫃員或全體。 |
 
-> 票券狀態由伺服器把關：`markServing`／`finish` 只接受已叫號或服務中的票券；已完成（finished）或已取消（canceled）的票券不可再被叫號、服務、結束、取消或轉櫃，違規請求回傳 `409`。
+> 票券狀態由伺服器把關：`markServing`／`finish`／`recall` 只接受已叫號或服務中的票券；已完成（finished）或已取消（canceled）的票券不可再被叫號、服務、結束、取消或轉櫃，違規請求回傳 `409`。已叫號或服務中的票屬於叫號的櫃台，其他櫃員操作回傳 `403`。前一天以前未結束的等候、已叫號、服務中票券，會在當天第一次佇列讀寫時改為 `canceled`（`result` 為 `expired`）。
 
 ### 4. 管理員端點 (Admin Operations - 需 Admin 權限與 CSRF Token)
 
@@ -333,15 +381,15 @@ CallMiao/
 
 | 事件名稱 | 方向 | 載荷格式 (Payload) | 觸發時機與用途 |
 |----------|------|--------------------|----------------|
-| `queue:update` | 伺服器廣播至客戶端 | `{ "serviceType": "A", "overview": { ... } }` | 當有新取號、完成服務、取消票券時觸發，大廳看板與 Kiosk 即時更新等候人數。 |
-| `call:made` | 伺服器廣播至客戶端 | `{ "ticket": { "id": 1, "number": "A001", "counter": "2", "calledAt": "..." } }` | 櫃員執行叫號或重新叫號時廣播，大廳看板接收後切換跳號顯示並觸發語音廣播。 |
-| `agent:message` | 伺服器廣播至櫃員端 | `{ "type": "info", "message": "系統通告內容" }` | 系統管理員或背景服務發送給全體在線櫃員之即時訊息。 |
+| `queue:update` | 伺服器廣播至客戶端 | `{ "serviceType": "A", "overview": { "summary", "waiting", "currentCalls" } }` | 任何票券變動時觸發。各頁面直接用推播的資料更新畫面，票券頁只在自己的票變動時才查詢一次。 |
+| `call:made` | 伺服器廣播至客戶端 | `{ "ticket": { "id": 1, "number": "A001", "status": "called", "counter": "2", "calledAt": "..." } }` | 櫃員執行叫號或重新叫號時廣播，大廳看板接收後觸發語音廣播。內部叫號不廣播。 |
+| `agent:message` | 伺服器送至符合條件的櫃員 | `{ "text", "from", "toCounter", "toAgent", "time" }` | 櫃員之間的訊息；每次投遞都會重新確認收件者的 Session 與帳號狀態。 |
 
 ---
 
 ## 資料庫結構 (SQLite Schema)
 
-系統採用 SQLite 嵌入式資料庫，儲存於 `db/queue.db` 檔案中，主要包含三張核心資料表：
+系統採用 SQLite 嵌入式資料庫，儲存於 `DB_DIR` 下的 `queue.db`，主要包含三張核心資料表：
 
 ### 1. `seq` 表（每日業務流水號管理）
 
@@ -349,7 +397,7 @@ CallMiao/
 |----------|------|----------|------|
 | `serviceType` | TEXT | PRIMARY KEY (聯合主鍵) | 業務類別代碼（例如：A、B、C）。 |
 | `ymd` | TEXT | PRIMARY KEY (聯合主鍵) | 日期字串，格式為 `YYYYMMDD`。 |
-| `seq` | INTEGER | NOT NULL, DEFAULT 0 | 該服務別在該日期之當前最大發放號碼流水號。 |
+| `seq` | INTEGER | NOT NULL | 該服務別在該日期之當前最大發放號碼流水號。 |
 
 ### 2. `tickets` 表（排隊票券資料）
 
@@ -358,12 +406,15 @@ CallMiao/
 | `id` | INTEGER | PRIMARY KEY AUTOINCREMENT | 票券唯一系統序號。 |
 | `serviceType` | TEXT | NOT NULL | 服務類別（如 A、B、C）。 |
 | `number` | TEXT | NOT NULL | 完整票號字串（例如：`A001`、`B012`）。 |
-| `status` | TEXT | NOT NULL, DEFAULT 'waiting' | 票券狀態：`waiting` (等待中)、`calling` (叫號中)、`serving` (服務中)、`finished` (已完成)、`cancelled` (已取消)。 |
+| `status` | TEXT | NOT NULL, DEFAULT 'waiting' | 票券狀態：`waiting` (等待中)、`called` (已叫號)、`serving` (服務中)、`finished` (已完成)、`canceled` (已取消)。 |
 | `counter` | TEXT | NULLABLE | 當前受理服務之櫃台編號。 |
-| `result` | TEXT | NULLABLE | 服務結果說明或取消原因備註。 |
-| `createdAt` | TEXT | NOT NULL | 取號建立時間（ISO 8601 / SQLite datetime）。 |
+| `result` | TEXT | NULLABLE | 服務結果說明或取消原因備註；跨日自動作廢時為 `expired`。 |
+| `createdAt` | TEXT | NOT NULL | 取號建立時間（ISO 8601）。 |
 | `calledAt` | TEXT | NULLABLE | 首次或最近叫號時間。 |
 | `finishedAt` | TEXT | NULLABLE | 完成服務或取消時間。 |
+| `clientKey` | TEXT | NULLABLE | 匿名取號來源 IP 的 HMAC，用於 `MAX_WAITING_PER_CLIENT`；櫃員取號與取號機為空值。 |
+
+索引：`(status, serviceType, createdAt)`、`(counter, status)`、`(clientKey, status)`，啟動時自動建立。
 
 ### 3. `agents` 表（櫃員與管理員帳號資料）
 
@@ -371,11 +422,12 @@ CallMiao/
 |----------|------|----------|------|
 | `id` | INTEGER | PRIMARY KEY AUTOINCREMENT | 使用者識別 ID。 |
 | `account` | TEXT | UNIQUE, NOT NULL | 登入帳號名稱。 |
-| `name` | TEXT | NOT NULL | 櫃員或管理員真實姓名/顯示名稱。 |
+| `name` | TEXT | NULLABLE | 櫃員或管理員顯示名稱；空值時以帳號顯示。顯示名稱不可重複。 |
 | `password` | TEXT | NOT NULL | 經 bcrypt 加密演算法計算後之密碼雜湊值。 |
 | `counter` | TEXT | NULLABLE | 預設綁定之櫃台編號（例如：`1`、`2`）。 |
-| `role` | TEXT | NOT NULL, DEFAULT 'agent' | 權限角色：`admin` (管理員)、`agent` (一般櫃員)。 |
-| `active` | INTEGER | NOT NULL, DEFAULT 1 | 啟用狀態：`1` (正常啟用)、`0` (停用凍結)。 |
+| `role` | TEXT | NULLABLE | 權限角色：`admin` 為管理員，其他值或空值為一般櫃員。 |
+| `active` | INTEGER | DEFAULT 1 | 啟用狀態：`1` (正常啟用)、`0` (停用凍結)。 |
+| `sessionVersion` | INTEGER | NOT NULL, DEFAULT 0 | 改密碼或停用時遞增，使既有 Session 失效。 |
 | `createdAt` | TEXT | NOT NULL | 帳號建立時間。 |
 | `updatedAt` | TEXT | NULLABLE | 帳號最後更新時間。 |
 
@@ -468,9 +520,9 @@ pm2 logs callmiao
 - **原因**：多個程序同時開啟 SQLite 資料庫檔案進行寫入，或有 GUI 檢視軟體佔用鎖定。
 - **解決方法**：關閉所有第三方 SQLite 視覺化工具，終止重複運行的 background node/bun 程序。如仍無法釋放，備份資料庫後刪除 `db/` 目錄下的 `.db-wal` 與 `.db-shm` 暫存檔。
 
-### 3. 跨域存取拒絕（CORS Origin Denied）
-- **原因**：前端發出請求之網域未包含於 `.env` 的 `ALLOWED_ORIGINS` 白名單內。
-- **解決方法**：檢查 `.env` 設定，將前端來源網址（例如 `https://kiosk.yourcompany.com`）加入 `ALLOWED_ORIGINS`，多個網域以逗號分隔且不要包含多餘空格。開發模式下 localhost 會自動放行。
+### 3. 跨域存取拒絕（回傳 403 `origin not allowed`）
+- **原因**：發出請求的頁面來自其他網站，且該網站不在 `ALLOWED_ORIGINS` 或 `PUBLIC_ORIGIN`。伺服器自己的頁面（同主機）一律放行。
+- **解決方法**：檢查 `.env` 設定，將前端來源網址（例如 `https://www.yourcompany.com`）加入 `ALLOWED_ORIGINS`，多個網域以逗號分隔且不要包含多餘空格。反向代理請保留 `proxy_set_header Host $host;`，否則同主機判斷會失效。
 
 ### 4. 管理 API 報告 CSRF 錯誤（EBADCSRFTOKEN / invalid csrf token）
 - **原因**：發送 `POST` / `PUT` / `DELETE` 請求至管理員 API 時，未在 Request Header 中提供有效的 `x-csrf-token`。
@@ -479,6 +531,20 @@ pm2 logs callmiao
 ---
 
 ## 版本更新紀錄 (Changelog)
+
+### [2.0.0] - 2026-11-15
+- **破壞性變更（升級前請更新 `.env`）**：
+  - 新增必填環境變數 `TZ`、`SERVICE_NAME_<代碼>`、`SERVICE_DESC_<代碼>`、`MAX_WAITING_PER_CLIENT`、`KIOSK_IPS`（可留空）、`DB_DIR`，缺少時拒絕啟動。原本放在 `./db` 的資料請設 `DB_DIR=db`。
+  - `GET /api/qrcode?text=` 改為 `GET /api/qrcode/:ticketId`；`/api/config` 只回傳 `services`；`/api/overview` 與 `queue:update` 增加 `waiting`，因此移除 `GET /api/tickets/waiting`。
+  - 已叫號或服務中的票只能由該櫃台（或管理員）操作，其他櫃員回 `403`；`toCounter` 只能搭配 `keepStatus: true`。
+  - 跨來源被拒時回 `403`（原本為 `500`）。
+- **修正**：
+  - 櫃員頁的選取不再被推播換成自己櫃台的票；取消、結束的確認視窗顯示號碼，按取消即放棄動作。
+  - 前一天未結束的已叫號、服務中票券與等候票一起自動作廢；「一天」以 `TZ` 的午夜為準，不再跟著伺服器時區。
+  - 取號頁可被 `ALLOWED_ORIGINS` 內的網站以 iframe 嵌入；`widget.js` 改用自身所在網域載入取號頁。
+  - 伺服器自己的網址自動放行；登入不再刪除密碼前後空白。
+  - 推播帶上各服務等候順序，票券頁與櫃員頁不再每次推播都查詢 API；tickets 表新增索引。
+- **精簡**：移除未使用的 `auth-checker.js`、`input-validator.js`、`url-manager.js`、`connect-sqlite3`、`dayjs` 與指向已刪除腳本的 npm scripts；新增 `bun test` 整合測試。
 
 ### [1.2.0] - 2025-11-27
 - **安全性加固**：

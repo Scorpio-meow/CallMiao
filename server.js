@@ -5,10 +5,12 @@ const http = require('http');
 const express = require('express');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
+const { ipKeyGenerator } = rateLimit;
 const session = require('express-session');
 const helmet = require('helmet');
-const dayjs = require('dayjs');
 const QRCode = require('qrcode');
+const sharp = require('sharp');
+const svgCaptcha = require('svg-captcha');
 const { openDatabase } = require('./lib/sqlite');
 const bcrypt = require('bcryptjs');
 require('dotenv').config();
@@ -21,7 +23,28 @@ if (!SESSION_SECRET) {
   console.error('   Generate one using: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'base64\'))"\n');
   process.exit(1);
 }
-// Service catalogue (e.g. A,B,C,D,E); ticket APIs accept only these codes
+function isValidTimeZone(zone) {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: zone });
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+if (!process.env.TZ || !isValidTimeZone(process.env.TZ)) {
+  console.error('\n⚠️  CRITICAL: TZ is not set or is not a valid IANA time zone!');
+  console.error('   Please set TZ (the business time zone that decides when ticket numbers restart, e.g. Asia/Taipei) in your .env file.\n');
+  process.exit(1);
+}
+function requirePositiveInteger(name, description) {
+  const raw = process.env[name];
+  if (!/^\d+$/.test(String(raw)) || Number(raw) < 1) {
+    console.error(`\n⚠️  CRITICAL: ${name} is not set or is not a positive integer!`);
+    console.error(`   Please set ${name} (${description}) in your .env file.\n`);
+    process.exit(1);
+  }
+  return Number(raw);
+}
 const SERVICE_TYPES = process.env.SERVICE_TYPES
   ? process.env.SERVICE_TYPES.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
   : [];
@@ -30,13 +53,38 @@ if (SERVICE_TYPES.length === 0) {
   console.error('   Please set SERVICE_TYPES (comma-separated service codes, e.g. A,B,C,D,E) in your .env file.\n');
   process.exit(1);
 }
-// Upper bound on waiting tickets per service for anonymous ticket creation; staff createTicket is not capped
-const MAX_WAITING_PER_SERVICE = Number(process.env.MAX_WAITING_PER_SERVICE);
-if (!/^\d+$/.test(String(process.env.MAX_WAITING_PER_SERVICE)) || MAX_WAITING_PER_SERVICE < 1) {
-  console.error('\n⚠️  CRITICAL: MAX_WAITING_PER_SERVICE is not set or is not a positive integer!');
-  console.error('   Please set MAX_WAITING_PER_SERVICE (a positive integer, the maximum number of waiting tickets per service) in your .env file.\n');
+if (SERVICE_TYPES.some(code => !/^[A-Z0-9]+$/.test(code))) {
+  console.error('\n⚠️  CRITICAL: SERVICE_TYPES may only contain letters and digits (e.g. A,B,C,D,E).\n');
   process.exit(1);
 }
+const missingServiceVars = SERVICE_TYPES
+  .flatMap(code => [`SERVICE_NAME_${code}`, `SERVICE_DESC_${code}`])
+  .filter(key => !process.env[key] || !process.env[key].trim());
+if (missingServiceVars.length > 0) {
+  console.error('\n⚠️  CRITICAL: Every service code needs a display name and a description:');
+  missingServiceVars.forEach(key => console.error(`   - ${key}`));
+  console.error('\nPlease set these in your .env file.\n');
+  process.exit(1);
+}
+const SERVICES = SERVICE_TYPES.map(code => ({
+  code,
+  name: process.env[`SERVICE_NAME_${code}`].trim(),
+  description: process.env[`SERVICE_DESC_${code}`].trim()
+}));
+const MAX_WAITING_PER_SERVICE = requirePositiveInteger('MAX_WAITING_PER_SERVICE', 'the maximum number of waiting tickets per service');
+const MAX_WAITING_PER_CLIENT = requirePositiveInteger('MAX_WAITING_PER_CLIENT', 'the maximum number of waiting tickets one client IP may hold');
+if (process.env.KIOSK_IPS === undefined) {
+  console.error('\n⚠️  CRITICAL: KIOSK_IPS is not set!');
+  console.error('   Please set KIOSK_IPS (comma-separated kiosk device IPs exempt from MAX_WAITING_PER_CLIENT; an empty value means none) in your .env file.\n');
+  process.exit(1);
+}
+const KIOSK_IPS = process.env.KIOSK_IPS.split(',').map(s => s.trim()).filter(Boolean);
+if (!process.env.DB_DIR) {
+  console.error('\n⚠️  CRITICAL: DB_DIR is not set!');
+  console.error('   Please set DB_DIR (directory for queue.db and sessions.db, relative to the project root or absolute) in your .env file.\n');
+  process.exit(1);
+}
+const DB_DIR = path.resolve(__dirname, process.env.DB_DIR);
 let ALLOWED_ORIGINS = [];
 if (process.env.ALLOWED_ORIGINS) {
   ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim().replace(/\/$/, '')).filter(Boolean);
@@ -51,7 +99,10 @@ if (!isProdEnv) {
     ALLOWED_ORIGINS.push(localhostOrigin);
   }
 }
-const PUBLIC_ORIGIN = process.env.PUBLIC_ORIGIN || null;
+const PUBLIC_ORIGIN = process.env.PUBLIC_ORIGIN ? process.env.PUBLIC_ORIGIN.trim().replace(/\/$/, '') : null;
+if (PUBLIC_ORIGIN && !ALLOWED_ORIGINS.includes(PUBLIC_ORIGIN)) {
+  ALLOWED_ORIGINS.push(PUBLIC_ORIGIN);
+}
 const TRUST_PROXY = process.env.TRUST_PROXY;
 if (isProdEnv) {
   console.log('🔒 Running in PRODUCTION mode');
@@ -71,9 +122,8 @@ if (isProdEnv) {
   console.log('🔧 Running in DEVELOPMENT mode');
   console.log(`📍 Auto-allowing origin: http://localhost:${PORT}`);
 }
-const dbDir = path.join(__dirname, 'db');
-if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
-const dbPath = path.join(dbDir, 'queue.db');
+if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
+const dbPath = path.join(DB_DIR, 'queue.db');
 const db = openDatabase(dbPath);
 db.pragma('journal_mode = WAL');
 try {
@@ -98,7 +148,8 @@ CREATE TABLE IF NOT EXISTS tickets (
   result TEXT,
   createdAt TEXT NOT NULL,
   calledAt TEXT,
-  finishedAt TEXT
+  finishedAt TEXT,
+  clientKey TEXT
 );
 `);
 } catch (err) {
@@ -122,7 +173,6 @@ CREATE TABLE IF NOT EXISTS agents (
   updatedAt TEXT
 );
 `);
-  // Existing databases: add the column used to revoke sessions on password change / deactivation
   const agentColumns = db.prepare('PRAGMA table_info(agents)').all().map(c => c.name);
   if (!agentColumns.includes('sessionVersion')) {
     db.exec('ALTER TABLE agents ADD COLUMN sessionVersion INTEGER NOT NULL DEFAULT 0');
@@ -133,45 +183,62 @@ CREATE TABLE IF NOT EXISTS agents (
   }
   throw err;
 }
-function getNextNumber(serviceType) {
-  const ymd = dayjs().format('YYYYMMDD');
-  const getNext = db.transaction((svc) => {
-    const ymd = dayjs().format('YYYYMMDD');
-    const row = db.prepare('SELECT seq FROM seq WHERE serviceType=? AND ymd=?').get(svc, ymd);
-    let next;
-    if (row) {
-      next = row.seq + 1;
-      db.prepare('UPDATE seq SET seq=? WHERE serviceType=? AND ymd=?').run(next, svc, ymd);
-    } else {
-      next = 1;
-      db.prepare('INSERT INTO seq(serviceType, ymd, seq) VALUES (?, ?, ?)').run(svc, ymd, next);
-    }
-    const padded = String(next).padStart(3, '0');
-    return `${svc}${padded}`;
-  });
-  return getNext(serviceType);
+const ticketColumns = db.prepare('PRAGMA table_info(tickets)').all().map(c => c.name);
+if (!ticketColumns.includes('clientKey')) {
+  db.exec('ALTER TABLE tickets ADD COLUMN clientKey TEXT');
 }
-// Ticket numbers restart every day, so waiting tickets from earlier days are void: expire them once per day
-// before any queue read or write, otherwise they are called first and share numbers with today's tickets
-const expireStaleWaitingStmt = db.prepare("UPDATE tickets SET status='canceled', finishedAt=?, result='expired' WHERE status='waiting' AND createdAt < ?");
+db.exec(`
+CREATE INDEX IF NOT EXISTS idx_tickets_status_service ON tickets(status, serviceType, createdAt);
+CREATE INDEX IF NOT EXISTS idx_tickets_counter_status ON tickets(counter, status);
+CREATE INDEX IF NOT EXISTS idx_tickets_client_status ON tickets(clientKey, status);
+`);
+const TICKET_COLUMNS = 'id, serviceType, number, status, counter, result, createdAt, calledAt, finishedAt';
+const selectTicketStmt = db.prepare(`SELECT ${TICKET_COLUMNS} FROM tickets WHERE id=?`);
+function getTicket(id) {
+  return selectTicketStmt.get(id);
+}
+function localDayKey(date) {
+  return `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
+}
+const getNextNumber = db.transaction((serviceType) => {
+  const ymd = localDayKey(new Date());
+  const row = db.prepare('SELECT seq FROM seq WHERE serviceType=? AND ymd=?').get(serviceType, ymd);
+  let next;
+  if (row) {
+    next = row.seq + 1;
+    db.prepare('UPDATE seq SET seq=? WHERE serviceType=? AND ymd=?').run(next, serviceType, ymd);
+  } else {
+    next = 1;
+    db.prepare('INSERT INTO seq(serviceType, ymd, seq) VALUES (?, ?, ?)').run(serviceType, ymd, next);
+  }
+  return `${serviceType}${String(next).padStart(3, '0')}`;
+});
+const insertTicketStmt = db.prepare("INSERT INTO tickets(serviceType, number, status, createdAt, clientKey) VALUES (?, ?, 'waiting', ?, ?)");
+function createTicket(serviceType, clientKey) {
+  const info = insertTicketStmt.run(serviceType, getNextNumber(serviceType), new Date().toISOString(), clientKey);
+  return getTicket(info.lastInsertRowid);
+}
+const expireStaleTicketsStmt = db.prepare("UPDATE tickets SET status='canceled', finishedAt=?, result='expired' WHERE status IN ('waiting','called','serving') AND createdAt < ?");
 let lastExpiryDay = null;
-function expireStaleWaiting() {
-  const today = dayjs().format('YYYYMMDD');
+function expireStaleTickets() {
+  const now = new Date();
+  const today = localDayKey(now);
   if (lastExpiryDay === today) return;
-  expireStaleWaitingStmt.run(dayjs().toISOString(), dayjs().startOf('day').toISOString());
+  const startOfToday = new Date(now);
+  startOfToday.setHours(0, 0, 0, 0);
+  expireStaleTicketsStmt.run(now.toISOString(), startOfToday.toISOString());
   lastExpiryDay = today;
 }
-function isAllowedOrigin(origin) {
+function isAllowedOrigin(origin, host) {
   if (!origin) return true;
-  // Outside production ALLOWED_ORIGINS already contains http://localhost:PORT; other local ports must be listed
-  // explicitly, because the session cookie is shared by every port of the same host
-  const currentLocalhost = `http://localhost:${PORT}`;
-  if (origin === currentLocalhost) return true;
   const normalizedOrigin = origin.replace(/\/$/, '');
-  return ALLOWED_ORIGINS.includes(normalizedOrigin);
+  if (ALLOWED_ORIGINS.includes(normalizedOrigin)) return true;
+  try {
+    return new URL(normalizedOrigin).host === host;
+  } catch (err) {
+    return false;
+  }
 }
-// TRUST_PROXY: hop count (e.g. 1), "false", or a comma-separated list of proxy IPs/subnets.
-// Only trusted proxies may set X-Forwarded-For/-Host/-Proto (used by req.ip, req.protocol, req.host).
 function parseTrustProxy(value) {
   if (value === 'false') return false;
   if (/^\d+$/.test(value)) return Number(value);
@@ -183,28 +250,28 @@ const server = http.createServer(app);
 const { Server } = require('socket.io');
 const io = new Server(server, {
   cors: { origin: ALLOWED_ORIGINS, credentials: true },
-  // The cors option only covers polling; WebSocket upgrades need their own Origin check
   allowRequest: (req, cb) => {
     const origin = req.headers.origin;
-    if (isAllowedOrigin(origin)) return cb(null, true);
+    if (isAllowedOrigin(origin, req.headers.host)) return cb(null, true);
     console.warn(`⚠️  Socket.IO blocked: ${origin} (not in allowlist)`);
     return cb('origin not allowed', false);
   }
 });
-app.use(cors({
-  origin: (origin, cb) => {
-    if (isAllowedOrigin(origin)) return cb(null, true);
-    console.warn(`⚠️  CORS blocked: ${origin} (not in allowlist)`);
-    return cb(new Error('CORS origin denied'));
-  },
-  credentials: true
+app.use(cors((req, cb) => {
+  const origin = req.get('origin');
+  if (isAllowedOrigin(origin, req.get('host'))) return cb(null, { origin: true, credentials: true });
+  console.warn(`⚠️  CORS blocked: ${origin} (not in allowlist)`);
+  const err = new Error('origin not allowed');
+  err.status = 403;
+  err.expose = true;
+  return cb(err);
 }));
 app.use(express.json({ limit: '100kb' }));
 app.use(express.urlencoded({ extended: true, limit: '100kb' }));
 const SQLiteStore = require('./lib/session-store')(session);
 const sessionStore = new SQLiteStore({
   db: 'sessions.db',
-  dir: './db'
+  dir: DB_DIR
 });
 const sessionMiddleware = session({
   store: sessionStore,
@@ -220,9 +287,7 @@ const sessionMiddleware = session({
   name: 'queueSessionId'
 });
 app.use(sessionMiddleware);
-// Share the express-session with Socket.IO so staff sockets can be identified
 io.engine.use(sessionMiddleware);
-// Synchronizer token stored in the server-side session (replaces deprecated csurf cookie mode)
 function issueCsrfToken(req) {
   if (!req.session.csrfToken) req.session.csrfToken = crypto.randomBytes(32).toString('hex');
   return req.session.csrfToken;
@@ -236,7 +301,6 @@ function isValidCsrfToken(req) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 function csrfProtection(req, res, next) {
-  // Every CSRF-protected route requires login; keep 401 so clients redirect to the login page
   if (!req.session || !req.session.agent) {
     return res.status(401).json({ error: 'unauthorized - not logged in' });
   }
@@ -250,86 +314,42 @@ function csrfProtection(req, res, next) {
 }
 function conditionalCsrf(req, res, next) {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
-  const exemptPaths = [
-    '/api/tickets',
-    '/api/qrcode',
-  ];
-  if (exemptPaths.includes(req.path)) return next();
-  if (req.path.startsWith('/api/captcha')) return next();
-  if (req.path === '/api/login') return next();
+  if (req.path === '/api/tickets' || req.path === '/api/login') return next();
   return csrfProtection(req, res, next);
 }
 app.use(conditionalCsrf);
-app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'"],
-      styleSrc: ["'self'"],
-      imgSrc: ["'self'", "data:", "blob:"],
-      fontSrc: ["'self'", "data:"],
-      connectSrc: ["'self'", "ws:", "wss:"],
-      frameAncestors: ["'self'"],
-      // The app is also served over plain HTTP on the LAN (--host)
-      upgradeInsecureRequests: null
-    }
-  }
-}));
-const isProd = process.env.NODE_ENV === 'production';
-const commonLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 120,
-  standardHeaders: true,
-  legacyHeaders: false
+const cspDirectives = {
+  defaultSrc: ["'self'"],
+  scriptSrc: ["'self'"],
+  styleSrc: ["'self'"],
+  imgSrc: ["'self'", "data:", "blob:"],
+  fontSrc: ["'self'", "data:"],
+  connectSrc: ["'self'", "ws:", "wss:"],
+  upgradeInsecureRequests: null
+};
+function securityHeaders(frameAncestors, xFrameOptions) {
+  return helmet({
+    contentSecurityPolicy: { directives: { ...cspDirectives, frameAncestors } },
+    xFrameOptions
+  });
+}
+const pageSecurityHeaders = securityHeaders(["'self'"], { action: 'sameorigin' });
+const embeddableSecurityHeaders = securityHeaders(["'self'", ...ALLOWED_ORIGINS], false);
+app.use((req, res, next) => {
+  const headers = /^\/kiosk(\/|$)/.test(req.path) ? embeddableSecurityHeaders : pageSecurityHeaders;
+  headers(req, res, next);
 });
-const loginLimiter = rateLimit({
-  windowMs: 10 * 60 * 1000,
-  max: 30,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'too many login attempts, please try later' }
-});
-const captchaLimiter = rateLimit({
-  windowMs: 5 * 60 * 1000,
-  max: 60,
-  standardHeaders: true,
-  legacyHeaders: false
-});
-const qrcodeLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 60,
-  standardHeaders: true,
-  legacyHeaders: false
-});
-const adminAgentLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 120,
-  standardHeaders: true,
-  legacyHeaders: false
-});
-const ticketCreationLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 60,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'too many ticket creations, please try later' }
-});
-const publicReadLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 120,
-  standardHeaders: true,
-  legacyHeaders: false
-});
-const staticLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 300,
-  standardHeaders: true,
-  legacyHeaders: false,
-  skip: (req, res) => req.path && req.path.startsWith('/api')
-});
-// Map, not a plain object: client-supplied tokens must never resolve to inherited properties
+function limiter(windowMs, max, error, options) {
+  return rateLimit({ windowMs, max, standardHeaders: true, legacyHeaders: false, message: { error }, ...options });
+}
+const loginLimiter = limiter(10 * 60 * 1000, 30, 'too many login attempts, please try later');
+const captchaLimiter = limiter(5 * 60 * 1000, 60, 'too many captcha requests, please try later');
+const qrcodeLimiter = limiter(60 * 1000, 60, 'too many qrcode requests, please try later');
+const adminAgentLimiter = limiter(60 * 1000, 120, 'too many requests, please try later');
+const ticketCreationLimiter = limiter(60 * 1000, 60, 'too many ticket creations, please try later');
+const publicReadLimiter = limiter(60 * 1000, 120, 'too many requests, please try later');
+const staticLimiter = limiter(60 * 1000, 300, 'too many requests, please try later', { skip: (req) => req.path.startsWith('/api') });
 const captchaStore = new Map();
-const svgCaptcha = require('svg-captcha');
 function genToken() { return crypto.randomBytes(16).toString('hex'); }
 setInterval(() => {
   const now = Date.now();
@@ -343,29 +363,19 @@ app.get('/api/captcha/new', captchaLimiter, (req, res) => {
   res.json({ token, expiresAt });
 });
 app.get('/api/captcha/image/:token', captchaLimiter, async (req, res) => {
-  const { token } = req.params;
-  const rec = captchaStore.get(token);
+  const rec = captchaStore.get(req.params.token);
   if (!rec || rec.expiresAt < Date.now()) return res.status(404).send('invalid token');
   try {
-    const svg = rec.svg || (`<svg xmlns="http://www.w3.org/2000/svg"><text>${rec.code}</text></svg>`);
-    let sharpLib = null;
-    try { sharpLib = require('sharp'); } catch (e) { /* sharp not available */ }
-    if (sharpLib) {
-      const png = await sharpLib(Buffer.from(svg, 'utf8')).png().toBuffer();
-      res.setHeader('Content-Type', 'image/png');
-      res.setHeader('Cache-Control', 'no-store');
-      res.send(png);
-    } else {
-      res.setHeader('Content-Type', 'image/svg+xml');
-      res.setHeader('Cache-Control', 'no-store');
-      res.send(svg);
-    }
+    const png = await sharp(Buffer.from(rec.svg, 'utf8')).png().toBuffer();
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(png);
   } catch (err) {
     console.error('Captcha image generation error:', isProdEnv ? err.message : err);
     res.status(500).send('captcha error');
   }
 });
-app.post('/api/login', loginLimiter, (req, res) => {
+app.post('/api/login', loginLimiter, async (req, res) => {
   const { account, password, captchaToken, captcha } = req.body || {};
   if (typeof captchaToken !== 'string' || typeof captcha !== 'string' || !captchaToken || !captcha) {
     return res.status(400).json({ error: 'captcha required' });
@@ -377,7 +387,7 @@ app.post('/api/login', loginLimiter, (req, res) => {
   if (!account) return res.status(401).json({ error: 'invalid credentials' });
   const user = db.prepare('SELECT * FROM agents WHERE account=? AND active=1').get(String(account));
   if (!user) return res.status(401).json({ error: 'invalid credentials' });
-  const ok = (user.password && password) ? bcrypt.compareSync(String(password), String(user.password)) : false;
+  const ok = (user.password && password) ? await bcrypt.compare(String(password), String(user.password)) : false;
   if (!ok) return res.status(401).json({ error: 'invalid credentials' });
   const agent = {
     id: user.id,
@@ -417,16 +427,15 @@ app.get('/api/agents', requireAdmin, (req, res) => {
   const rows = db.prepare('SELECT id, account, name, counter, role, active, createdAt, updatedAt FROM agents ORDER BY id DESC').all();
   res.json({ agents: rows });
 });
-app.post('/api/agents', requireAdmin, (req, res) => {
+app.post('/api/agents', requireAdmin, async (req, res) => {
   const { account, name, password, counter, role } = req.body || {};
   if (!account || !password) return res.status(400).json({ error: 'account and password required' });
   if ((name && isDisplayNameTaken(String(name), null)) || db.prepare('SELECT 1 FROM agents WHERE name=?').get(String(account))) {
     return res.status(400).json({ error: 'name already in use' });
   }
-  const now = dayjs().toISOString();
-  const hash = bcrypt.hashSync(String(password), 10);
+  const hash = await bcrypt.hash(String(password), 10);
   try {
-    const info = db.prepare('INSERT INTO agents(account,name,password,counter,role,createdAt) VALUES (?,?,?,?,?,?)').run(account, name || null, hash, counter || null, role || null, now);
+    const info = db.prepare('INSERT INTO agents(account,name,password,counter,role,createdAt) VALUES (?,?,?,?,?,?)').run(account, name || null, hash, counter || null, role || null, new Date().toISOString());
     const row = db.prepare('SELECT id, account, name, counter, role, active, createdAt, updatedAt FROM agents WHERE id=?').get(info.lastInsertRowid);
     res.json({ agent: row });
   } catch (err) {
@@ -440,33 +449,28 @@ app.get('/api/agents/:id', requireAdmin, (req, res) => {
   if (!row) return res.status(404).json({ error: 'not found' });
   res.json({ agent: row });
 });
-app.put('/api/agents/:id', requireAdmin, (req, res) => {
+app.put('/api/agents/:id', requireAdmin, async (req, res) => {
   const id = req.params.id;
   const { name, password, counter, role, active } = req.body || {};
-  const now = dayjs().toISOString();
+  const newHash = password ? await bcrypt.hash(String(password), 10) : null;
   const existing = db.prepare('SELECT * FROM agents WHERE id=?').get(id);
   if (!existing) return res.status(404).json({ error: 'not found' });
   if (name && isDisplayNameTaken(String(name), existing.id)) return res.status(400).json({ error: 'name already in use' });
-  const hash = password ? bcrypt.hashSync(String(password), 10) : existing.password;
-  // undefined keeps the stored value; an empty string clears the field
+  const hash = newHash || existing.password;
   const newName = name === undefined ? existing.name : (name || null);
   const newCounter = counter === undefined ? existing.counter : (counter || null);
   const newRole = role === undefined ? existing.role : (role || null);
   const newActive = active === undefined ? existing.active : (Number(active) === 1 ? 1 : 0);
-  // Clearing the name makes the account the display name, which must stay unique too
   if (!newName && db.prepare('SELECT 1 FROM agents WHERE id IS NOT ? AND name=?').get(existing.id, existing.account)) {
     return res.status(400).json({ error: 'name already in use' });
   }
-  // An admin cannot demote or deactivate their own account and lock themselves out of the admin page
   if (existing.id === req.authenticatedAgent.id && (newRole !== 'admin' || newActive !== 1)) {
     return res.status(400).json({ error: 'cannot demote or deactivate your own account' });
   }
-  // A password reset or deactivation revokes the account's existing sessions
   const revokeSessions = Boolean(password) || Number(newActive) !== 1;
   db.prepare('UPDATE agents SET name=?, password=?, counter=?, role=?, active=?, sessionVersion=sessionVersion+?, updatedAt=? WHERE id=?')
-    .run(newName, hash, newCounter, newRole, newActive, revokeSessions ? 1 : 0, now, id);
+    .run(newName, hash, newCounter, newRole, newActive, revokeSessions ? 1 : 0, new Date().toISOString(), id);
   if (revokeSessions && existing.id === req.authenticatedAgent.id && Number(newActive) === 1) {
-    // Keep the admin's current session valid after resetting their own password
     req.session.agent.sessionVersion = db.prepare('SELECT sessionVersion FROM agents WHERE id=?').get(existing.id).sessionVersion;
   }
   const row = db.prepare('SELECT id, account, name, counter, role, active, createdAt, updatedAt FROM agents WHERE id=?').get(id);
@@ -484,35 +488,36 @@ function emitQueueUpdate(serviceType) {
   const overview = getOverview();
   io.emit('queue:update', { serviceType, overview });
 }
-// Fields safe to expose to anonymous clients; excludes agent notes (result)
 function publicTicket(row) {
   if (!row) return row;
   const { id, serviceType, number, status, counter, createdAt, calledAt, finishedAt } = row;
   return { id, serviceType, number, status, counter, createdAt, calledAt, finishedAt };
 }
-// Overview covers configured service codes only, so legacy rows with other codes are not broadcast
 const serviceTypePlaceholders = SERVICE_TYPES.map(() => '?').join(',');
+const selectWaitingStmt = db.prepare(`
+  SELECT id, serviceType, number, createdAt
+  FROM tickets
+  WHERE status='waiting'
+    AND serviceType IN (${serviceTypePlaceholders})
+  ORDER BY createdAt ASC, id ASC
+`);
+const selectCurrentCallsStmt = db.prepare(`
+  SELECT id, serviceType, number, status, counter, calledAt
+  FROM tickets
+  WHERE status IN ('called','serving')
+    AND serviceType IN (${serviceTypePlaceholders})
+  ORDER BY calledAt DESC
+  LIMIT 50
+`);
 function getOverview() {
-  expireStaleWaiting();
-  const rows = db.prepare(`
-    SELECT serviceType,
-           SUM(CASE WHEN status='waiting' THEN 1 ELSE 0 END) AS waiting,
-           SUM(CASE WHEN status='called' THEN 1 ELSE 0 END) AS called,
-           SUM(CASE WHEN status='serving' THEN 1 ELSE 0 END) AS serving,
-           SUM(CASE WHEN status='finished' THEN 1 ELSE 0 END) AS finished
-    FROM tickets
-    WHERE serviceType IN (${serviceTypePlaceholders})
-    GROUP BY serviceType
-  `).all(...SERVICE_TYPES);
-  const currentCalls = db.prepare(`
-    SELECT id, serviceType, number, counter, calledAt
-    FROM tickets
-    WHERE status IN ('called','serving')
-      AND serviceType IN (${serviceTypePlaceholders})
-    ORDER BY calledAt DESC
-    LIMIT 50
-  `).all(...SERVICE_TYPES);
-  return { summary: rows, currentCalls };
+  expireStaleTickets();
+  const waiting = Object.fromEntries(SERVICE_TYPES.map(code => [code, []]));
+  for (const row of selectWaitingStmt.all(...SERVICE_TYPES)) {
+    waiting[row.serviceType].push({ id: row.id, number: row.number, createdAt: row.createdAt });
+  }
+  const summary = SERVICE_TYPES.map(code => ({ serviceType: code, waiting: waiting[code].length }));
+  const currentCalls = selectCurrentCallsStmt.all(...SERVICE_TYPES);
+  return { summary, waiting, currentCalls };
 }
 function normalizeServiceType(value) {
   if (typeof value !== 'string') return null;
@@ -524,111 +529,47 @@ app.get('/api/health', (req, res) => {
 });
 function inferPublicOrigin(req) {
   if (PUBLIC_ORIGIN) return PUBLIC_ORIGIN;
-  // req.protocol / req.host honor X-Forwarded-* only from proxies trusted via TRUST_PROXY
-  const host = req.host || `localhost:${PORT}`;
-  return `${req.protocol}://${host}`;
+  return `${req.protocol}://${req.host}`;
 }
-function isPrivateLanHost(hostname) {
-  return /^(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})$/.test(hostname);
-}
-function detectEnvironment(req) {
-  const host = req.host || `localhost:${PORT}`;
-  const hostname = host.split(':')[0];
-  const env = {
-    isLocal: false,
-    isDevTunnel: false,
-    isProduction: false,
-    hostname,
-    port: PORT,
-    nodeEnv: process.env.NODE_ENV || 'development'
-  };
-  if (hostname === 'localhost' || hostname === '127.0.0.1' || isPrivateLanHost(hostname)) {
-    env.isLocal = true;
-  }
-  if (hostname.endsWith('.devtunnels.ms')) {
-    env.isDevTunnel = true;
-  }
-  if (!env.isLocal && !env.isDevTunnel) {
-    env.isProduction = true;
-  }
-  return env;
+function ticketUrlFor(req, ticketId) {
+  return `${inferPublicOrigin(req)}/ticket/index.html?id=${ticketId}`;
 }
 app.get('/api/config', (req, res) => {
-  try {
-    const publicOrigin = inferPublicOrigin(req);
-    const environment = detectEnvironment(req);
-    // publicOrigin may be request-derived outside production; never let a shared cache store it
-    res.setHeader('Cache-Control', 'no-store');
-    res.json({
-      publicOrigin,
-      environment,
-      allowedOrigins: ALLOWED_ORIGINS,
-      features: {
-        autoRedirect: true,
-        smartUrlDetection: true
-      }
-    });
-  } catch (err) {
-    console.error('Config API error:', err);
-    res.status(500).json({ error: 'config error' });
-  }
+  res.json({ services: SERVICES });
 });
+function clientKeyFor(req) {
+  if (KIOSK_IPS.includes(ipKeyGenerator(String(req.ip), false))) return null;
+  return crypto.createHmac('sha256', SESSION_SECRET).update(ipKeyGenerator(String(req.ip))).digest('hex');
+}
+const countWaitingStmt = db.prepare("SELECT COUNT(*) AS n FROM tickets WHERE serviceType=? AND status='waiting'");
+const countClientWaitingStmt = db.prepare("SELECT COUNT(*) AS n FROM tickets WHERE clientKey=? AND status='waiting'");
 app.post('/api/tickets', ticketCreationLimiter, (req, res) => {
-  try {
-    const serviceType = normalizeServiceType((req.body || {}).serviceType);
-    if (!serviceType) return res.status(400).json({ error: 'invalid serviceType' });
-    expireStaleWaiting();
-    // The per-IP rate limit bounds speed only; this bounds how many unserved tickets anonymous clients can queue
-    const waiting = db.prepare("SELECT COUNT(*) AS n FROM tickets WHERE serviceType=? AND status='waiting'").get(serviceType).n;
-    if (waiting >= MAX_WAITING_PER_SERVICE) return res.status(429).json({ error: 'queue is full, please try later' });
-    const createdAt = dayjs().toISOString();
-    const number = getNextNumber(serviceType);
-    const info = db.prepare(`
-      INSERT INTO tickets(serviceType, number, status, createdAt)
-      VALUES (?, ?, 'waiting', ?)
-    `).run(serviceType, number, createdAt);
-    const ticket = db.prepare('SELECT * FROM tickets WHERE id=?').get(info.lastInsertRowid);
-    emitQueueUpdate(serviceType);
-    res.json({ ticket });
-  } catch (err) {
-    console.error('Create ticket error:', isProdEnv ? err.message : (err && err.stack || err));
-    res.status(500).json({ error: 'create failed' });
+  const serviceType = normalizeServiceType((req.body || {}).serviceType);
+  if (!serviceType) return res.status(400).json({ error: 'invalid serviceType' });
+  expireStaleTickets();
+  const clientKey = clientKeyFor(req);
+  if (clientKey && countClientWaitingStmt.get(clientKey).n >= MAX_WAITING_PER_CLIENT) {
+    return res.status(429).json({ error: 'too many waiting tickets from this network' });
   }
-});
-app.get('/api/tickets/waiting', publicReadLimiter, (req, res) => {
-  let serviceTypes = SERVICE_TYPES;
-  if (req.query.serviceType !== undefined) {
-    const serviceType = normalizeServiceType(req.query.serviceType);
-    if (!serviceType) return res.status(400).json({ error: 'invalid serviceType' });
-    serviceTypes = [serviceType];
-  }
-  expireStaleWaiting();
-  const rows = db.prepare(`
-    SELECT id, serviceType, number, status, createdAt
-    FROM tickets
-    WHERE status='waiting'
-      AND serviceType IN (${serviceTypes.map(() => '?').join(',')})
-    ORDER BY createdAt ASC
-  `).all(...serviceTypes);
-  res.json({ tickets: rows });
+  if (countWaitingStmt.get(serviceType).n >= MAX_WAITING_PER_SERVICE) return res.status(429).json({ error: 'queue is full, please try later' });
+  const ticket = createTicket(serviceType, clientKey);
+  emitQueueUpdate(serviceType);
+  res.json({ ticket: publicTicket(ticket), ticketUrl: ticketUrlFor(req, ticket.id) });
 });
 app.get('/api/ticket/:id', publicReadLimiter, (req, res) => {
-  const { id } = req.params;
-  const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(id);
+  const row = getTicket(req.params.id);
   if (!row) return res.status(404).json({ error: 'not found' });
   res.json({ ticket: publicTicket(row) });
 });
 app.get('/api/overview', publicReadLimiter, (req, res) => {
   res.json(getOverview());
 });
-// Agent row for a session that is still valid: account active and no password reset / deactivation since login
 function loadSessionAgent(sess) {
   if (!sess || !sess.agent) return null;
   const agent = db.prepare('SELECT * FROM agents WHERE id=? AND active=1').get(sess.agent.id);
   if (!agent || agent.sessionVersion !== sess.agent.sessionVersion) return null;
   return agent;
 }
-// Display names (name, or account when unnamed) address direct messages, so they must be unique
 function isDisplayNameTaken(value, exceptId) {
   return !!db.prepare('SELECT 1 FROM agents WHERE id IS NOT ? AND (name=? OR account=?)').get(exceptId, value, value);
 }
@@ -660,10 +601,10 @@ function requireAdmin(req, res, next) {
     next();
   });
 }
-// Statuses each agent action may start from; finished/canceled tickets are closed and immutable
 const TICKET_ACTION_FROM = {
   callSpecific: ['waiting', 'called', 'serving'],
   markServing: ['called', 'serving'],
+  recall: ['called', 'serving'],
   finish: ['called', 'serving'],
   cancel: ['waiting', 'called', 'serving'],
   transfer: ['waiting', 'called', 'serving']
@@ -673,32 +614,43 @@ function rejectTicketTransition(action, row, res) {
   res.status(409).json({ error: 'invalid ticket state', status: row.status });
   return true;
 }
+function agentCounter(agent) {
+  return String(agent.counter || '').trim();
+}
+function rejectForeignTicket(agent, row, res) {
+  if (agent.role === 'admin' || !['called', 'serving'].includes(row.status)) return false;
+  if (row.counter === agentCounter(agent)) return false;
+  res.status(403).json({ error: 'ticket belongs to another counter' });
+  return true;
+}
+function isOptionalNote(value) {
+  return value === undefined || value === null || typeof value === 'string';
+}
+const selectBusyCounterStmt = db.prepare("SELECT id FROM tickets WHERE counter=? AND status IN ('called','serving') LIMIT 1");
 app.use('/api/agent', adminAgentLimiter);
 app.get('/api/agent/ticket/:id', requireAgentAuth, (req, res) => {
-  const { id } = req.params;
-  const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(id);
+  const row = getTicket(req.params.id);
   if (!row) return res.status(404).json({ error: 'not found' });
   res.json({ ticket: row });
 });
 app.post('/api/agent/callNext', requireAgentAuth, (req, res) => {
   const serviceType = normalizeServiceType((req.body || {}).serviceType);
   if (!serviceType) return res.status(400).json({ error: 'invalid serviceType' });
-  const ctr = String(req.authenticatedAgent.counter || '').trim();
+  const ctr = agentCounter(req.authenticatedAgent);
   if (!ctr) return res.status(400).json({ error: 'counter not assigned' });
-  const busy = db.prepare("SELECT id FROM tickets WHERE counter=? AND status IN ('called','serving') LIMIT 1").get(ctr);
+  expireStaleTickets();
+  const busy = selectBusyCounterStmt.get(ctr);
   if (busy) return res.status(409).json({ error: 'counter busy', ticketId: busy.id });
-  expireStaleWaiting();
-  const ticket = db.prepare(`
-    SELECT * FROM tickets
+  const next = db.prepare(`
+    SELECT id FROM tickets
     WHERE serviceType=? AND status='waiting'
-    ORDER BY createdAt ASC
+    ORDER BY createdAt ASC, id ASC
     LIMIT 1
   `).get(serviceType);
-  if (!ticket) return res.status(404).json({ error: 'no waiting ticket' });
-  const calledAt = dayjs().toISOString();
+  if (!next) return res.status(404).json({ error: 'no waiting ticket' });
   db.prepare('UPDATE tickets SET status=?, calledAt=?, counter=? WHERE id=?')
-    .run('called', calledAt, ctr, ticket.id);
-  const updated = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticket.id);
+    .run('called', new Date().toISOString(), ctr, next.id);
+  const updated = getTicket(next.id);
   io.emit('call:made', { ticket: publicTicket(updated) });
   emitQueueUpdate(serviceType);
   res.json({ ticket: updated });
@@ -706,37 +658,39 @@ app.post('/api/agent/callNext', requireAgentAuth, (req, res) => {
 app.post('/api/agent/finish', requireAgentAuth, (req, res) => {
   const { ticketId, result } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: 'ticketId is required' });
-  const finishedAt = dayjs().toISOString();
-  const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
+  if (!isOptionalNote(result)) return res.status(400).json({ error: 'result must be text' });
+  const row = getTicket(ticketId);
   if (!row) return res.status(404).json({ error: 'not found' });
   if (rejectTicketTransition('finish', row, res)) return;
+  if (rejectForeignTicket(req.authenticatedAgent, row, res)) return;
   db.prepare('UPDATE tickets SET status=?, finishedAt=?, result=? WHERE id=?')
-    .run('finished', finishedAt, result || null, ticketId);
-  const updated = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
+    .run('finished', new Date().toISOString(), result || null, row.id);
+  const updated = getTicket(row.id);
   emitQueueUpdate(updated.serviceType);
   res.json({ ticket: updated });
 });
 app.post('/api/agent/markServing', requireAgentAuth, (req, res) => {
   const { ticketId } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: 'ticketId is required' });
-  const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
+  const row = getTicket(ticketId);
   if (!row) return res.status(404).json({ error: 'not found' });
   if (rejectTicketTransition('markServing', row, res)) return;
   if (!row.counter) return res.status(409).json({ error: 'ticket not called to a counter' });
-  db.prepare('UPDATE tickets SET status=? WHERE id=?').run('serving', ticketId);
-  const updated = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
+  if (rejectForeignTicket(req.authenticatedAgent, row, res)) return;
+  db.prepare('UPDATE tickets SET status=? WHERE id=?').run('serving', row.id);
+  const updated = getTicket(row.id);
   emitQueueUpdate(updated.serviceType);
   res.json({ ticket: updated });
 });
 app.post('/api/agent/recall', requireAgentAuth, (req, res) => {
   const { ticketId } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: 'ticketId is required' });
-  const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
+  const row = getTicket(ticketId);
   if (!row) return res.status(404).json({ error: 'not found' });
-  if (!['called', 'serving'].includes(row.status)) return res.status(400).json({ error: 'not callable state' });
-  const calledAt = dayjs().toISOString();
-  db.prepare('UPDATE tickets SET calledAt=? WHERE id=?').run(calledAt, ticketId);
-  const updated = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
+  if (rejectTicketTransition('recall', row, res)) return;
+  if (rejectForeignTicket(req.authenticatedAgent, row, res)) return;
+  db.prepare('UPDATE tickets SET calledAt=? WHERE id=?').run(new Date().toISOString(), row.id);
+  const updated = getTicket(row.id);
   io.emit('call:made', { ticket: publicTicket(updated) });
   emitQueueUpdate(updated.serviceType);
   res.json({ ticket: updated });
@@ -744,86 +698,77 @@ app.post('/api/agent/recall', requireAgentAuth, (req, res) => {
 app.post('/api/agent/cancel', requireAgentAuth, (req, res) => {
   const { ticketId, reason } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: 'ticketId is required' });
-  const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
+  if (!isOptionalNote(reason)) return res.status(400).json({ error: 'reason must be text' });
+  const row = getTicket(ticketId);
   if (!row) return res.status(404).json({ error: 'not found' });
   if (rejectTicketTransition('cancel', row, res)) return;
-  const finishedAt = dayjs().toISOString();
+  if (rejectForeignTicket(req.authenticatedAgent, row, res)) return;
   db.prepare('UPDATE tickets SET status=?, finishedAt=?, result=? WHERE id=?')
-    .run('canceled', finishedAt, reason || null, ticketId);
-  const updated = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
+    .run('canceled', new Date().toISOString(), reason || null, row.id);
+  const updated = getTicket(row.id);
   emitQueueUpdate(updated.serviceType);
   res.json({ ticket: updated });
 });
 app.post('/api/agent/transfer', requireAgentAuth, (req, res) => {
   const { ticketId, toServiceType, toCounter, keepStatus } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: 'ticketId is required' });
-  const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
+  const row = getTicket(ticketId);
   if (!row) return res.status(404).json({ error: 'not found' });
   if (rejectTicketTransition('transfer', row, res)) return;
+  if (rejectForeignTicket(req.authenticatedAgent, row, res)) return;
   const targetType = toServiceType ? normalizeServiceType(toServiceType) : row.serviceType;
   if (!targetType) return res.status(400).json({ error: 'invalid serviceType' });
-  // The public counter label may only be a counter an admin assigned to an active account (same rule as
-  // callNext/callSpecific), normalized the same way so the counter-busy check cannot be bypassed
+  const keep = keepStatus === true;
   let requestedCounter = null;
   if (toCounter !== undefined) {
     if (typeof toCounter !== 'string' || !toCounter.trim()) return res.status(400).json({ error: 'invalid counter' });
+    if (!keep || !['called', 'serving'].includes(row.status)) {
+      return res.status(400).json({ error: 'a counter can only be assigned to a called or serving ticket that keeps its status' });
+    }
     requestedCounter = toCounter.trim();
     const assigned = db.prepare('SELECT 1 FROM agents WHERE active=1 AND TRIM(counter)=? LIMIT 1').get(requestedCounter);
     if (!assigned) return res.status(400).json({ error: 'unknown counter' });
   }
-  const status = keepStatus ? row.status : 'waiting';
-  const calledAt = keepStatus ? row.calledAt : null;
-  const counter = requestedCounter !== null ? requestedCounter : (keepStatus ? row.counter : null);
-  if (keepStatus && counter) {
-    const ctr = String(counter);
-    const busy = db.prepare("SELECT id FROM tickets WHERE counter=? AND status IN ('called','serving') LIMIT 1").get(ctr);
+  const status = keep ? row.status : 'waiting';
+  const calledAt = keep ? row.calledAt : null;
+  const counter = requestedCounter !== null ? requestedCounter : (keep ? row.counter : null);
+  if (keep && counter) {
+    const busy = selectBusyCounterStmt.get(String(counter));
     if (busy && busy.id !== row.id) return res.status(409).json({ error: 'counter busy', ticketId: busy.id });
   }
   db.prepare('UPDATE tickets SET serviceType=?, counter=?, status=?, calledAt=? WHERE id=?')
-    .run(targetType, counter, status, calledAt, ticketId);
-  const updated = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
+    .run(targetType, counter, status, calledAt, row.id);
+  const updated = getTicket(row.id);
   emitQueueUpdate(updated.serviceType);
   res.json({ ticket: updated });
 });
 app.post('/api/agent/createTicket', requireAgentAuth, (req, res) => {
-  try {
-    const serviceType = normalizeServiceType((req.body || {}).serviceType);
-    if (!serviceType) return res.status(400).json({ error: 'invalid serviceType' });
-    const createdAt = dayjs().toISOString();
-    const number = getNextNumber(serviceType);
-    const info = db.prepare(`
-      INSERT INTO tickets(serviceType, number, status, createdAt)
-      VALUES (?, ?, 'waiting', ?)
-    `).run(serviceType, number, createdAt);
-    const ticket = db.prepare('SELECT * FROM tickets WHERE id=?').get(info.lastInsertRowid);
-    emitQueueUpdate(serviceType);
-    res.json({ ticket });
-  } catch (err) {
-    console.error('Agent create ticket error:', isProdEnv ? err.message : (err && err.stack || err));
-    res.status(500).json({ error: 'create failed' });
-  }
+  const serviceType = normalizeServiceType((req.body || {}).serviceType);
+  if (!serviceType) return res.status(400).json({ error: 'invalid serviceType' });
+  const ticket = createTicket(serviceType, null);
+  emitQueueUpdate(serviceType);
+  res.json({ ticket });
 });
 app.post('/api/agent/callSpecific', requireAgentAuth, (req, res) => {
   const { ticketId, internal } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: 'ticketId is required' });
-  const ctr = String(req.authenticatedAgent.counter || '').trim();
+  const ctr = agentCounter(req.authenticatedAgent);
   if (!ctr) return res.status(400).json({ error: 'counter not assigned' });
-  const busy = db.prepare("SELECT id FROM tickets WHERE counter=? AND status IN ('called','serving') LIMIT 1").get(ctr);
+  expireStaleTickets();
+  const busy = selectBusyCounterStmt.get(ctr);
   if (busy && String(busy.id) !== String(ticketId)) return res.status(409).json({ error: 'counter busy', ticketId: busy.id });
-  expireStaleWaiting();
-  const row = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
+  const row = getTicket(ticketId);
   if (!row) return res.status(404).json({ error: 'not found' });
   if (rejectTicketTransition('callSpecific', row, res)) return;
-  const calledAt = dayjs().toISOString();
+  if (rejectForeignTicket(req.authenticatedAgent, row, res)) return;
   db.prepare('UPDATE tickets SET status=?, calledAt=?, counter=? WHERE id=?')
-    .run('called', calledAt, ctr, ticketId);
-  const updated = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId);
+    .run('called', new Date().toISOString(), ctr, row.id);
+  const updated = getTicket(row.id);
   if (!internal) io.emit('call:made', { ticket: publicTicket(updated) });
   emitQueueUpdate(updated.serviceType);
   res.json({ ticket: updated });
 });
 app.get('/api/agent/history', requireAgentAuth, (req, res) => {
-  // A negative LIMIT means "no limit" in SQLite, so accept only decimal digits and clamp to 1..500
   const rawLimit = req.query.limit === undefined ? '100' : req.query.limit;
   if (typeof rawLimit !== 'string' || !/^\d+$/.test(rawLimit)) return res.status(400).json({ error: 'invalid limit' });
   const limit = Math.min(Math.max(parseInt(rawLimit, 10), 1), 500);
@@ -833,7 +778,7 @@ app.get('/api/agent/history', requireAgentAuth, (req, res) => {
     if (!serviceType) return res.status(400).json({ error: 'invalid serviceType' });
   }
   const rows = db.prepare(`
-    SELECT * FROM tickets
+    SELECT ${TICKET_COLUMNS} FROM tickets
     WHERE status IN ('finished','canceled')
       ${serviceType ? 'AND serviceType=?' : ''}
     ORDER BY COALESCE(finishedAt, calledAt, createdAt) DESC
@@ -843,17 +788,16 @@ app.get('/api/agent/history', requireAgentAuth, (req, res) => {
 });
 app.post('/api/agent/message', requireAgentAuth, async (req, res) => {
   const { text, toCounter, toAgent } = req.body || {};
-  if (!text) return res.status(400).json({ error: 'text is required' });
+  if (typeof text !== 'string' || !text.trim()) return res.status(400).json({ error: 'text is required' });
   const sender = req.authenticatedAgent;
   const payload = { text, from: sender.name || sender.account, toCounter: toCounter || null, toAgent: toAgent || null, time: new Date().toISOString() };
   try {
     if (toCounter) {
-      const ctr = String(toCounter);
-      await emitToAgents('agent:message', payload, (agent) => agent.counter === ctr);
+      const ctr = String(toCounter).trim();
+      await emitToAgents('agent:message', payload, (agent) => agentCounter(agent) === ctr);
       return res.json({ ok: true, targeted: 'counter', toCounter });
     }
     if (toAgent) {
-      // Resolve the display name to one agent id now; delivery never trusts a name-keyed room
       const targets = db.prepare("SELECT id FROM agents WHERE active=1 AND COALESCE(NULLIF(name, ''), account)=?").all(String(toAgent));
       if (targets.length === 0) return res.status(404).json({ error: 'agent not found' });
       if (targets.length > 1) return res.status(409).json({ error: 'ambiguous agent name' });
@@ -882,34 +826,31 @@ app.get('/api/agent/profile', requireAgentAuth, (req, res) => {
   };
   res.json({ agent: safeAgent });
 });
-app.put('/api/agent/profile', requireAgentAuth, (req, res) => {
+app.put('/api/agent/profile', requireAgentAuth, async (req, res) => {
   const agent = req.authenticatedAgent;
   const { name, password, currentPassword } = req.body || {};
   if (name && isDisplayNameTaken(String(name), agent.id)) return res.status(400).json({ error: 'name already in use' });
-  const now = dayjs().toISOString();
   let hash = agent.password;
   if (password) {
-    // Replacing the long-term credential needs proof of the current one, not only a live session
     if (typeof password !== 'string' || typeof currentPassword !== 'string' ||
-        !bcrypt.compareSync(currentPassword, String(agent.password))) {
+      !(await bcrypt.compare(currentPassword, String(agent.password)))) {
       return res.status(403).json({ error: 'current password required' });
     }
-    hash = bcrypt.hashSync(password, 10);
+    hash = await bcrypt.hash(password, 10);
   }
   const updateName = name || agent.name;
-  // A password change revokes the account's other sessions; the current session is kept valid below
   db.prepare('UPDATE agents SET name=?, password=?, sessionVersion=sessionVersion+?, updatedAt=? WHERE id=?')
-    .run(updateName, hash, password ? 1 : 0, now, agent.id);
+    .run(updateName, hash, password ? 1 : 0, new Date().toISOString(), agent.id);
   const updated = db.prepare('SELECT id, account, name, counter, role, active, createdAt, updatedAt, sessionVersion FROM agents WHERE id=?').get(agent.id);
   req.session.agent.sessionVersion = updated.sessionVersion;
   const { sessionVersion, ...safeAgent } = updated;
   res.json({ agent: safeAgent });
 });
-app.get('/api/qrcode', qrcodeLimiter, async (req, res) => {
+app.get('/api/qrcode/:ticketId', qrcodeLimiter, async (req, res) => {
+  const ticket = getTicket(req.params.ticketId);
+  if (!ticket) return res.status(404).send('not found');
   try {
-    const text = req.query.text;
-    if (!text) return res.status(400).send('text is required');
-    const buffer = await QRCode.toBuffer(text, { type: 'png', margin: 1, scale: 6 });
+    const buffer = await QRCode.toBuffer(ticketUrlFor(req, ticket.id), { type: 'png', margin: 1, scale: 6 });
     res.setHeader('Content-Type', 'image/png');
     res.send(buffer);
   } catch (err) {
@@ -921,8 +862,6 @@ function loadStoredSession(sessionId) {
     sessionStore.get(sessionId, (err, sess) => resolve(err ? null : sess));
   });
 }
-// Staff sockets are tracked in one room. Each delivery re-reads the socket's session and current
-// account, so logout, deactivation, deletion, password reset, rename and counter changes apply immediately.
 async function emitToAgents(event, payload, matches) {
   const sockets = await io.in('agents').fetchSockets();
   for (const s of sockets) {
@@ -968,21 +907,9 @@ server.listen(PORT, bindHost, () => {
   }
 });
 app.use((err, req, res, next) => {
-  const isJsonParseError = err && (err.type === 'entity.parse.failed' || (err instanceof SyntaxError && err.status === 400 && 'body' in err));
-  if (isJsonParseError) {
-    if (!isProdEnv) {
-      console.warn('⚠️  Received invalid JSON payload from', req.ip || req.get('x-forwarded-for') || req.connection.remoteAddress);
-    }
-    return res.status(400).json({ error: 'invalid JSON' });
-  }
-  next(err);
-});
-app.use((err, req, res, next) => {
-  if (!err) return next();
-  if (isProdEnv) {
-    console.error('Unhandled error:', err.message || err);
-    return res.status(500).json({ error: 'internal server error' });
-  }
-  console.error('Unhandled error (dev):', err && err.stack ? err.stack : err);
-  res.status(500).json({ error: 'internal server error', details: err && err.message ? err.message : undefined });
+  if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'invalid JSON' });
+  if (err.expose && err.status >= 400 && err.status < 500) return res.status(err.status).json({ error: err.message });
+  console.error('Unhandled error:', isProdEnv ? err.message : err.stack);
+  if (isProdEnv) return res.status(500).json({ error: 'internal server error' });
+  res.status(500).json({ error: 'internal server error', details: err.message });
 });

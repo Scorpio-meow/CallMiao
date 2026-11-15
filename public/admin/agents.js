@@ -1,6 +1,5 @@
-let USER_MODE = 'agent';
-let CURRENT_AGENT = null;
-const urlManager = window.URLManager;
+let me = null;
+function displayName(agent) { return agent.name || agent.account; }
 function showMsg(text, err) {
   const el = document.getElementById('msg');
   el.textContent = text;
@@ -9,23 +8,16 @@ function showMsg(text, err) {
   el.classList.add(err ? 'error' : 'ok');
   setTimeout(() => el.classList.add('hidden'), 4000);
 }
-async function checkLoginAndPermissions() {
-  const agentName = sessionStorage.getItem('ui_agent_name');
-  const agentRole = sessionStorage.getItem('ui_agent_role');
-  const agentAccount = sessionStorage.getItem('ui_agent_account');
-  if (!agentName || !agentAccount) {
-    console.log('Admin - 未登入，跳轉到登入頁面');
-    await urlManager.redirectToLogin();
-    return false;
+async function init() {
+  const res = await apiFetch('/api/agent/profile', { method: 'GET' });
+  if (res.status === 401) {
+    location.href = `/login/index.html?redirect=${encodeURIComponent(location.pathname)}`;
+    return;
   }
-  if (agentRole === 'admin') {
-    USER_MODE = 'admin';
-    initializeAdminInterface();
-  } else {
-    USER_MODE = 'agent';
-    initializeAgentInterface();
-  }
-  return true;
+  if (!res.ok) return showMsg('載入個人資料失敗', true);
+  me = (await res.json()).agent;
+  if (me.role === 'admin') initializeAdminInterface();
+  else initializeAgentInterface();
 }
 async function apiFetch(url, opts = {}) {
   opts = Object.assign({
@@ -52,7 +44,7 @@ async function getCsrfToken() {
 let AGENTS = [];
 let EDITING_AGENT = null;
 function isSelf(agent) {
-  return agent.account === sessionStorage.getItem('ui_agent_account');
+  return agent.id === me.id;
 }
 function makeBadge(text, cls) {
   const span = document.createElement('span');
@@ -112,25 +104,13 @@ async function loadAgents() {
     renderAgents();
   } catch (err) { wrap.innerHTML = `<div class="muted">載入失敗</div>`; console.error(err); }
 }
-async function loadAgentProfile() {
-  try {
-    const res = await apiFetch('/api/agent/profile', { method: 'GET' });
-    const data = await res.json();
-    if (data.error) return showMsg('載入個人資料失敗: ' + data.error, true);
-    CURRENT_AGENT = data.agent;
-    document.getElementById('profileName').value = data.agent.name || '';
-    document.getElementById('profileRole').textContent = data.agent.role === 'admin' ? '管理員' : '一般櫃員';
-    document.getElementById('profileAccount').textContent = data.agent.account || '-';
-    document.getElementById('profileDisplayName').textContent = data.agent.name || '-';
-    document.getElementById('profileDisplayCounter').textContent = data.agent.counter || '-';
-    sessionStorage.setItem('ui_agent_name', data.agent.name || '');
-    sessionStorage.setItem('ui_agent_counter', data.agent.counter || '');
-    sessionStorage.setItem('ui_agent_role', data.agent.role || '');
-    sessionStorage.setItem('ui_agent_account', data.agent.account || '');
-  } catch (err) {
-    console.error(err);
-    showMsg('載入個人資料失敗', true);
-  }
+function renderProfile() {
+  document.getElementById('profileName').value = me.name || '';
+  document.getElementById('profileRole').textContent = me.role === 'admin' ? '管理員' : '一般櫃員';
+  document.getElementById('profileAccount').textContent = me.account || '-';
+  document.getElementById('profileDisplayName').textContent = me.name || '-';
+  document.getElementById('profileDisplayCounter').textContent = me.counter || '-';
+  document.getElementById('loginStatus').textContent = `已登入為${me.role === 'admin' ? '管理員' : '櫃員'} - ${displayName(me)}`;
 }
 function openEditDialog(agent) {
   EDITING_AGENT = agent;
@@ -160,7 +140,6 @@ async function saveEdit() {
   const role = document.getElementById('editRole').value;
   const active = document.getElementById('editActive').checked ? 1 : 0;
   const password = document.getElementById('editPassword').value;
-  // Send only changed fields; an empty string clears name/counter on the server
   const body = {};
   if (name !== (agent.name || '')) body.name = name;
   if (counter !== (agent.counter || '')) body.counter = counter;
@@ -212,7 +191,7 @@ function initializeAdminInterface() {
   document.getElementById('adminSection').classList.remove('hidden');
   document.getElementById('profileSection').classList.add('hidden');
   document.getElementById('pageTitle').textContent = '帳號管理（管理員）';
-  document.getElementById('loginStatus').textContent = `已登入為管理員 - ${sessionStorage.getItem('ui_agent_name')}`;
+  renderProfile();
   loadAgents();
 }
 function initializeAgentInterface() {
@@ -221,8 +200,7 @@ function initializeAgentInterface() {
   document.getElementById('adminSection').classList.add('hidden');
   document.getElementById('profileSection').classList.remove('hidden');
   document.getElementById('pageTitle').textContent = '個人資料管理';
-  document.getElementById('loginStatus').textContent = `已登入為櫃員 - ${sessionStorage.getItem('ui_agent_name')}`;
-  loadAgentProfile();
+  renderProfile();
 }
 async function logout() {
   try {
@@ -234,12 +212,7 @@ async function logout() {
   } catch (err) {
     console.warn('Logout API error:', err);
   }
-  sessionStorage.removeItem('ui_agent_name');
-  sessionStorage.removeItem('ui_agent_account');
-  sessionStorage.removeItem('ui_agent_counter');
-  sessionStorage.removeItem('ui_agent_role');
-  sessionStorage.removeItem('ui_agent_id');
-  await urlManager.safeRedirect('/login/index.html');
+  location.href = '/login/index.html';
 }
 document.getElementById('logout').onclick = logout;
 document.getElementById('agentFilter').oninput = renderAgents;
@@ -279,7 +252,7 @@ document.getElementById('updateProfileBtn').onclick = async () => {
   const password = document.getElementById('profilePassword').value;
   const currentPassword = document.getElementById('profileCurrentPassword').value;
   const body = {};
-  if (name !== (CURRENT_AGENT?.name || '')) body.name = name;
+  if (name !== (me.name || '')) body.name = name;
   if (password) {
     if (!currentPassword) return showMsg('變更密碼需輸入目前密碼', true);
     body.password = password;
@@ -299,12 +272,8 @@ document.getElementById('updateProfileBtn').onclick = async () => {
     showMsg('更新成功');
     document.getElementById('profilePassword').value = '';
     document.getElementById('profileCurrentPassword').value = '';
-    if (body.name) {
-      sessionStorage.setItem('ui_agent_name', body.name);
-    }
-    loadAgentProfile();
+    me = data.agent;
+    renderProfile();
   } catch (err) { showMsg('更新失敗', true); }
 };
-window.addEventListener('load', async () => {
-  await checkLoginAndPermissions();
-});
+window.addEventListener('load', init);

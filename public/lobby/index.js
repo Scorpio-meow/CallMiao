@@ -1,6 +1,5 @@
 const socket = io();
 let audioEnabled = false;
-// queue:update pushes the overview; only the initial render fetches it
 async function render(overview) {
   let data = overview;
   if (!data) {
@@ -33,7 +32,6 @@ function speak(text) {
       return;
     }
     if (!audioEnabled) {
-      // Many browsers block speech until a user gesture; warn to help debugging
       console.warn('audio not enabled yet; call enableAudio() or click 啟用聲音');
     }
     const u = new SpeechSynthesisUtterance(text);
@@ -41,14 +39,10 @@ function speak(text) {
     speechSynthesis.speak(u);
   } catch (e) { console.error('speak error', e); }
 }
-// Voice selection and speak multiple parts in sequence.
-// Format number to improve clarity & perceived loudness (read char-by-char)
 function formatNumberForSpeak(s) {
   try {
     if (s == null) return '';
     const str = String(s);
-    // Insert spaces between each character, e.g., A123 -> "A 1 2 3"
-    // This helps some TTS voices pronounce with more emphasis/clarity
     return str.split('').join(' ');
   } catch (_) { return String(s || ''); }
 }
@@ -57,7 +51,6 @@ function chooseVoice() {
   try {
     const voices = speechSynthesis.getVoices() || [];
     console.info('available voices', voices.map(v => ({ name: v.name, lang: v.lang })));
-    // prefer Chinese voice
     selectedVoice = voices.find(v => v.lang && v.lang.toLowerCase().startsWith('zh')) || voices[0] || null;
     if (selectedVoice) console.info('selected voice', { name: selectedVoice.name, lang: selectedVoice.lang });
   } catch (e) { console.warn('chooseVoice failed', e); }
@@ -66,7 +59,6 @@ if ('speechSynthesis' in window) {
   chooseVoice();
   speechSynthesis.onvoiceschanged = chooseVoice;
 }
-// Speak multiple parts. Each part may be a string or an object { text, volume, rate, pitch }
 function speakParts(parts) {
   try {
     if (!('speechSynthesis' in window)) return;
@@ -81,12 +73,11 @@ function speakParts(parts) {
       u.lang = 'zh-TW';
       if (selectedVoice) u.voice = selectedVoice;
       if (opts.volume !== undefined) {
-        // clamp to valid range
         const v = Number(opts.volume);
         u.volume = Math.max(0, Math.min(1, isFinite(v) ? v : 1));
       }
-      if (opts.rate !== undefined) u.rate = opts.rate; // default ~1
-      if (opts.pitch !== undefined) u.pitch = opts.pitch; // default ~1
+      if (opts.rate !== undefined) u.rate = opts.rate;
+      if (opts.pitch !== undefined) u.pitch = opts.pitch;
       u.onend = () => { i++; setTimeout(next, opts.pauseAfter || 80); };
       speechSynthesis.speak(u);
     }
@@ -94,13 +85,11 @@ function speakParts(parts) {
   } catch (err) { console.error('speakParts error', err); }
 }
 function enableAudio() {
-  // Called by a user gesture to unlock audio autoplay policy in browsers
   try {
     if ('speechSynthesis' in window) {
       const priming = new SpeechSynthesisUtterance('聲音已啟用');
       priming.lang = 'zh-TW';
       speechSynthesis.speak(priming);
-      // mark enabled so subsequent calls won't warn
       audioEnabled = true;
       const btn = document.getElementById('enableSoundBtn');
       if (btn) btn.style.display = 'none';
@@ -110,12 +99,11 @@ function enableAudio() {
   } catch (err) {
     console.warn('enableAudio speech failed, trying WebAudio fallback', err);
   }
-  // Fallback: create short silent buffer to prime audio output via Web Audio API
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     const o = ctx.createOscillator();
     const g = ctx.createGain();
-    g.gain.value = 0; // silent
+    g.gain.value = 0;
     o.connect(g); g.connect(ctx.destination);
     o.start();
     setTimeout(() => { try { o.stop(); ctx.close(); } catch (e) { } }, 100);
@@ -129,16 +117,10 @@ function enableAudio() {
 }
 socket.on('queue:update', (payload) => render(payload && payload.overview));
 socket.on('call:made', (payload) => {
-  // The display re-renders on the queue:update that follows every call
   const t = payload?.ticket;
   if (t) {
-    // fallback for counter and chain parts to ensure complete speech
     const counter = t.counter || '服務櫃台';
     console.info('call:made payload', { number: t.number, counter });
-    // Emphasize number by:
-    // 1) speaking it twice
-    // 2) spacing characters (A 1 2 3) to increase clarity
-    // 3) using max volume=1.0 and a more natural pitch/rate that sounds louder to human ears
     const numSpaced = formatNumberForSpeak(t.number);
     speakParts([
       { text: '請號碼', volume: 1.0, rate: 0.95, pitch: 1.0, pauseAfter: 160 },
@@ -149,11 +131,9 @@ socket.on('call:made', (payload) => {
   }
 });
 render();
-// attach enable button
 document.addEventListener('DOMContentLoaded', () => {
   const btn = document.getElementById('enableSoundBtn');
   if (btn) btn.addEventListener('click', enableAudio);
-  // If speechSynthesis is not available, hide the button
   if (!('speechSynthesis' in window) && btn) {
     btn.style.display = 'none';
   }

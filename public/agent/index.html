@@ -1,16 +1,12 @@
 <!doctype html>
 <html lang="zh-Hant">
-
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>櫃員端</title>
     <link rel="stylesheet" href="/agent/style.css" />
     <script src="/socket.io/socket.io.js"></script>
-    <script src="/utils/url-manager.js"></script>
-    <script src="/utils/auth-checker.js"></script>
 </head>
-
 <body>
     <div class="container agent-red">
         <div class="agent-header">
@@ -81,42 +77,11 @@
                     <input id="ticketId" placeholder="ticket number" />
                     <button id="pickFromInput" class="btn btn-light">選取</button>
                     <input type="hidden" id="ticketInternalId" />
-                    <input type="hidden" id="serviceType" value="A" />
+                    <input type="hidden" id="serviceType" />
                 </div>
                 <div id="selectedInfo" class="service-compact muted mt-8"></div>
             </td>
         </table>
-        <div class="legacy-panels hidden">
-            <div class="grid">
-                <div class="panel">
-                    <h3>目前等待</h3>
-                    <table class="table">
-                        <thead>
-                            <tr>
-                                <th>號碼</th>
-                                <th>時間</th>
-                            </tr>
-                        </thead>
-                        <tbody id="waiting"></tbody>
-                    </table>
-                </div>
-                <div class="panel">
-                    <h3>目前叫號 / 服務中</h3>
-                    <table class="table">
-                        <thead>
-                            <tr>
-                                <th>號碼</th>
-                                <th>櫃台</th>
-                                <th>叫號時間</th>
-                                <th></th>
-                            </tr>
-                        </thead>
-                        <tbody id="current"></tbody>
-                    </table>
-                    <div id="selectedInfoLegacy" class="selected-info muted"></div>
-                </div>
-            </div>
-        </div>
     </div>
     <div id="toaster" class="toaster"></div>
     <div id="historyModal" class="auth-overlay hidden">
@@ -128,19 +93,6 @@
             </div>
         </div>
     </div>
-    <div id="authOverlay" class="auth-overlay hidden">
-        <div class="auth-card">
-            <h2>櫃員登入</h2>
-            <label>姓名</label>
-            <input id="loginName" placeholder="輸入姓名" />
-            <label>櫃台（必填）</label>
-            <input id="loginCounter" placeholder="櫃台編號" />
-            <div class="actions mt-12 flex-end gap-8">
-                <button id="loginBtn" class="btn btn-primary">登入</button>
-            </div>
-        </div>
-    </div>
     <script src="/agent/index.js"></script>
 </body>
-
 </html>
