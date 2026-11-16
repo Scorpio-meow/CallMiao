@@ -11,6 +11,7 @@
 - [Nginx 反向代理](#nginx-反向代理)
 - [用 PM2 常駐執行](#用-pm2-常駐執行)
 - [資料庫檔案](#資料庫檔案)
+- [重設密碼](#重設密碼)
 - [升級版本](#升級版本)
 - [疑難排解](#疑難排解)
 
@@ -123,6 +124,20 @@ pm2 startup
 
 ---
 
+## 重設密碼
+
+忘記密碼、或建立管理員時出現 `UNIQUE constraint failed: agents.account`（帳號已存在）時，在專案根目錄執行下面的指令。最後兩個參數依序是帳號與新密碼：
+
+```bash
+bun -e "const { Database } = require('bun:sqlite'); const bcrypt = require('bcryptjs'); const [account, password] = process.argv.slice(-2); const db = new Database(require('path').resolve(process.env.DB_DIR, 'queue.db')); const r = db.run('UPDATE agents SET password = ?, active = 1, sessionVersion = sessionVersion + 1, updatedAt = ? WHERE account = ?', [bcrypt.hashSync(password, 10), new Date().toISOString(), account]); console.log(r.changes ? 'password reset: ' + account : 'account not found: ' + account);" admin "新密碼"
+```
+
+- 帳號若被停用，會一併重新啟用；角色維持不變。
+- 這個帳號原本的所有登入 Session 會立即失效。
+- 伺服器執行中也可以直接執行，不需要先停止。
+
+---
+
 ## 升級版本
 
 1. 閱讀 [CHANGELOG.md](../CHANGELOG.md) 中新版本的「破壞性變更」，補上新的必填環境變數。
@@ -201,6 +216,18 @@ Get-NetTCPConnection -LocalPort 3000 | Select-Object -ExpandProperty OwningProce
 - `too many waiting tickets from this network`：同一個來源的等候票已達 `MAX_WAITING_PER_CLIENT`。若現場顧客共用同一個對外 IP，請調高上限，或把取號機的 IP 加入 `KIOSK_IPS`。
 - `queue is full, please try later`：該服務別的等候票已達 `MAX_WAITING_PER_SERVICE`。
 - `too many ticket creations, please try later`：一分鐘內取號太多次，稍後再試。
+
+</details>
+
+<details>
+<summary><b>日誌出現 <code>ERR_ERL_UNEXPECTED_X_FORWARDED_FOR</code></b></summary>
+
+請求帶有 `X-Forwarded-For` 標頭，但 `TRUST_PROXY` 沒有設定。代表伺服器前面有一層代理，卻不信任它，結果所有透過代理進來的人都被當成同一個 IP，會共用取號上限與速率限制。
+
+- 前面是 Nginx 等反向代理：設 `TRUST_PROXY=1`。
+- 用 VS Code Dev Tunnels、ngrok 等同一台電腦上的通道測試：設 `TRUST_PROXY=loopback`。
+
+修改 `.env` 後要重新啟動伺服器。
 
 </details>
 

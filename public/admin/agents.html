@@ -4,101 +4,197 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Agents 管理</title>
+  <title>帳號管理 - 叫號喵</title>
+  <link rel="stylesheet" href="/shared/base.css" />
   <link rel="stylesheet" href="/admin/style.css" />
 </head>
 
 <body>
-  <div class="card">
-    <h1 id="pageTitle">帳號管理</h1>
-    <div id="loginRedirect">
-      <p>正在重定向到登入頁面...</p>
-      <p class="muted">如果沒有自動跳轉，請<a href="/login/index.html">點擊這裡</a>手動登入</p>
+  <header class="app-header">
+    <div class="app-brand">
+      <span>叫號喵</span>
+      <span class="divider" aria-hidden="true"></span>
+      <span class="section">後台管理</span>
     </div>
+    <div class="app-header-actions">
+      <span id="loginStatus" class="muted"></span>
+      <span id="roleBadge" class="badge hidden"></span>
+      <button id="logout" class="btn btn-ghost" type="button">登出</button>
+    </div>
+  </header>
+
+  <main class="page">
+    <div id="loginRedirect" class="empty-state">
+      <strong>正在前往登入頁</strong>
+      <a href="/login/index.html">沒有自動跳轉時，請點這裡登入</a>
+    </div>
+
     <div id="mainArea" class="hidden">
-      <div class="flex-between-center">
-        <strong id="loginStatus">已登入</strong>
-        <div class="actions">
-          <button id="logout" class="small">登出</button>
-        </div>
+      <div class="page-header">
+        <h1 id="pageTitle" class="page-title">帳號管理</h1>
+        <button id="openCreate" class="btn btn-primary hidden" type="button">新增帳號</button>
       </div>
-      <div id="adminSection" class="hidden">
-        <div class="mt-12">
-          <h3>建立新帳號</h3>
-          <label for="newAccount">帳號 (account)</label>
-          <input id="newAccount" placeholder="輸入帳號" />
-          <label for="newName">姓名 (name)</label>
-          <input id="newName" placeholder="輸入姓名（可留空）" />
-          <div class="row">
-            <div><label for="newPassword">密碼</label><input id="newPassword" type="password" placeholder="輸入密碼" /></div>
-            <div><label for="newCounter">櫃台</label><input id="newCounter" placeholder="例如 A1, B2, 1號" /></div>
-            <div><label for="newRole">角色</label>
-              <select id="newRole">
-                <option value="">一般櫃員</option>
-                <option value="admin">管理員</option>
-              </select>
+
+      <section id="adminSection" class="card hidden" aria-labelledby="pageTitle">
+        <div class="toolbar">
+          <input id="agentFilter" class="input filter" type="search" placeholder="搜尋帳號、姓名或櫃台" aria-label="搜尋帳號、姓名或櫃台" />
+          <span id="agentCount" class="muted tabular"></span>
+        </div>
+        <div id="agentsWrap" class="table-wrap"></div>
+      </section>
+
+      <section id="profileSection" class="profile-grid hidden">
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">帳號資訊</h2>
+          </div>
+          <dl class="desc-list card-body">
+            <div>
+              <dt>帳號</dt>
+              <dd id="profileAccount">-</dd>
+            </div>
+            <div>
+              <dt>姓名</dt>
+              <dd id="profileDisplayName">-</dd>
+            </div>
+            <div>
+              <dt>櫃台</dt>
+              <dd id="profileDisplayCounter">-</dd>
+            </div>
+            <div>
+              <dt>角色</dt>
+              <dd id="profileRole">-</dd>
+            </div>
+          </dl>
+        </div>
+        <form id="profileForm" class="card" novalidate>
+          <div class="card-header">
+            <h2 class="card-title">修改個人資料</h2>
+          </div>
+          <div class="card-body stack">
+            <div class="field">
+              <label for="profileName">姓名</label>
+              <input id="profileName" class="input" autocomplete="name" />
+            </div>
+            <div class="field">
+              <label for="profilePassword">新密碼</label>
+              <input id="profilePassword" class="input" type="password" autocomplete="new-password" />
+              <span class="field-help">留空表示不變更密碼</span>
+            </div>
+            <div class="field">
+              <label for="profileCurrentPassword">目前密碼</label>
+              <input id="profileCurrentPassword" class="input" type="password" autocomplete="current-password" />
+              <span class="field-help">變更密碼時必填</span>
             </div>
           </div>
-          <div class="mt-8"><button id="createBtn">建立</button></div>
-        </div>
-        <div class="mt-18">
-          <div class="flex-between-center">
-            <h3>現有帳號</h3>
-            <input id="agentFilter" class="filter" type="search" placeholder="搜尋帳號、姓名或櫃台" />
-          </div>
-          <div id="agentsWrap">載入中…</div>
-        </div>
-      </div>
-      <dialog id="editDialog">
-        <form id="editForm" method="dialog">
-          <h3>編輯帳號 <span id="editAccount" class="muted"></span></h3>
-          <label for="editName">姓名</label>
-          <input id="editName" placeholder="留空則以帳號顯示" />
-          <div class="row">
-            <div><label for="editCounter">櫃台</label><input id="editCounter" placeholder="例如 A1, B2, 1號" /></div>
-            <div><label for="editRole">角色</label>
-              <select id="editRole">
-                <option value="">一般櫃員</option>
-                <option value="admin">管理員</option>
-              </select>
-            </div>
-          </div>
-          <label class="checkbox"><input id="editActive" type="checkbox" /> 啟用（停用會立即登出該帳號）</label>
-          <label for="editPassword">重設密碼（留空表示不更改）</label>
-          <input id="editPassword" type="password" placeholder="輸入新密碼" autocomplete="new-password" />
-          <p id="editSelfNote" class="muted hidden">這是你目前登入的帳號，無法變更自己的角色或停用。</p>
-          <div class="dialog-actions">
-            <button type="button" id="editCancel" class="secondary">取消</button>
-            <button type="submit" id="editSave">儲存</button>
+          <div class="card-footer">
+            <button id="updateProfileBtn" class="btn btn-primary" type="submit">儲存變更</button>
           </div>
         </form>
-      </dialog>
-      <div id="profileSection" class="hidden">
-        <div class="mt-12">
-          <h3>個人資料編輯</h3>
-          <label for="profileName">姓名</label>
-          <input id="profileName" placeholder="輸入姓名" />
-          <label for="profilePassword">新密碼（留空表示不更改）</label>
-          <input id="profilePassword" type="password" placeholder="輸入新密碼" />
-          <label for="profileCurrentPassword">目前密碼（變更密碼時必填）</label>
-          <input id="profileCurrentPassword" type="password" placeholder="輸入目前密碼" autocomplete="current-password" />
-          <div class="mt-8">
-            <button id="updateProfileBtn">更新個人資料</button>
+      </section>
+    </div>
+  </main>
+
+  <dialog id="createDialog" class="modal" aria-labelledby="createTitle">
+    <form id="createForm" class="modal-form" novalidate>
+      <div class="modal-header">
+        <h2 id="createTitle" class="modal-title">新增帳號</h2>
+      </div>
+      <div class="modal-body">
+        <div class="form-grid">
+          <div class="field">
+            <label for="newAccount">帳號</label>
+            <input id="newAccount" class="input" autocomplete="off" required />
           </div>
-        </div>
-        <div class="mt-18">
-          <h3>帳號資訊</h3>
-          <div class="readonly-info">
-            <div><strong>角色：</strong><span id="profileRole">-</span></div>
-            <div><strong>帳號：</strong><span id="profileAccount">-</span></div>
-            <div><strong>姓名：</strong><span id="profileDisplayName">-</span></div>
-            <div><strong>櫃號：</strong><span id="profileDisplayCounter">-</span></div>
+          <div class="field">
+            <label for="newPassword">密碼</label>
+            <input id="newPassword" class="input" type="password" autocomplete="new-password" required />
+          </div>
+          <div class="field">
+            <label for="newName">姓名</label>
+            <input id="newName" class="input" autocomplete="off" />
+            <span class="field-help">留空時以帳號顯示</span>
+          </div>
+          <div class="field">
+            <label for="newCounter">櫃台</label>
+            <input id="newCounter" class="input" placeholder="例如 1 或 A1" autocomplete="off" />
+          </div>
+          <div class="field span-2">
+            <span class="field-label" id="newRoleLabel">角色</span>
+            <div class="segmented" role="radiogroup" aria-labelledby="newRoleLabel">
+              <label><input type="radio" name="newRole" value="" checked />一般櫃員</label>
+              <label><input type="radio" name="newRole" value="admin" />管理員</label>
+            </div>
           </div>
         </div>
       </div>
-    </div>
-    <div id="msg" class="notice hidden"></div>
-  </div>
+      <div class="modal-footer">
+        <button id="createCancel" class="btn" type="button">取消</button>
+        <button id="createBtn" class="btn btn-primary" type="submit">建立帳號</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="editDialog" class="modal" aria-labelledby="editTitle">
+    <form id="editForm" class="modal-form" novalidate>
+      <div class="modal-header">
+        <h2 id="editTitle" class="modal-title">編輯帳號 <span id="editAccount" class="muted"></span></h2>
+      </div>
+      <div class="modal-body">
+        <p id="editSelfNote" class="alert alert-info hidden">這是你目前登入的帳號，無法變更自己的角色或停用。</p>
+        <div class="form-grid">
+          <div class="field">
+            <label for="editName">姓名</label>
+            <input id="editName" class="input" autocomplete="off" />
+            <span class="field-help">留空時以帳號顯示</span>
+          </div>
+          <div class="field">
+            <label for="editCounter">櫃台</label>
+            <input id="editCounter" class="input" placeholder="例如 1 或 A1" autocomplete="off" />
+          </div>
+          <div class="field">
+            <span class="field-label" id="editRoleLabel">角色</span>
+            <div class="segmented" role="radiogroup" aria-labelledby="editRoleLabel">
+              <label><input type="radio" name="editRole" value="" />一般櫃員</label>
+              <label><input type="radio" name="editRole" value="admin" />管理員</label>
+            </div>
+          </div>
+          <div class="field">
+            <span class="field-label">狀態</span>
+            <label class="checkbox"><input id="editActive" type="checkbox" />啟用</label>
+            <span class="field-help">停用後會立即登出該帳號</span>
+          </div>
+          <div class="field span-2">
+            <label for="editPassword">重設密碼</label>
+            <input id="editPassword" class="input" type="password" autocomplete="new-password" />
+            <span class="field-help">留空表示不變更密碼</span>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="editCancel" class="btn" type="button">取消</button>
+        <button id="editSave" class="btn btn-primary" type="submit">儲存變更</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="confirmDialog" class="modal modal-sm" role="alertdialog" aria-labelledby="confirmTitle" aria-describedby="confirmDesc">
+    <form method="dialog" class="modal-form">
+      <div class="modal-header">
+        <h2 id="confirmTitle" class="modal-title"></h2>
+      </div>
+      <div class="modal-body">
+        <p id="confirmDesc" class="muted"></p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" type="submit" value="cancel">取消</button>
+        <button id="confirmOk" class="btn btn-danger" type="submit" value="ok"></button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toaster" class="toast-region" aria-live="polite"></div>
+  <script src="/shared/ui.js"></script>
   <script src="/admin/agents.js"></script>
 </body>
 

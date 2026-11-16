@@ -53,7 +53,7 @@ flowchart LR
 - Windows、macOS 或 Linux；資料庫用內建的 SQLite，不需要另外安裝
 
 > [!NOTE]
-> 用 Bun 執行時使用內建的 `bun:sqlite`；用 Node.js 執行時改用 `better-sqlite3`。`better-sqlite3` 是選用相依，在 Bun 底下安裝失敗不會影響使用。
+> 專案的指令都直接用 Bun 執行，資料庫使用 Bun 內建的 `bun:sqlite`。改用 Node.js 時，請用 `npm install` 安裝，再執行 `node server.js`（開發時用 `node --watch server.js`），資料庫會自動改用選用相依 `better-sqlite3`。
 
 ### 1. 安裝相依套件
 
@@ -105,7 +105,7 @@ bun run dev
 bun -e "const { Database } = require('bun:sqlite'); const bcrypt = require('bcryptjs'); const [account, password] = process.argv.slice(-2); const db = new Database(require('path').resolve(process.env.DB_DIR, 'queue.db')); db.run('INSERT INTO agents (account, password, role, createdAt) VALUES (?, ?, ?, ?)', [account, bcrypt.hashSync(password, 10), 'admin', new Date().toISOString()]); console.log('admin created:', account);" admin "你的密碼"
 ```
 
-之後的櫃員帳號都可以登入管理後台建立。
+之後的櫃員帳號都可以登入管理後台建立。如果出現 `UNIQUE constraint failed: agents.account`，代表帳號已經存在，請改用[重設密碼](docs/deployment.md#重設密碼)的指令。
 
 ### 5. 開始使用
 
@@ -149,7 +149,8 @@ bun run dev
 
 | 指令 | 用途 |
 |------|------|
-| `bun run dev` | 開發模式，檔案變更時自動重啟 |
+| `bun run dev` | 開發模式，用 Bun 內建的 `--watch`，伺服器程式變更時自動重啟 |
+| `bun run dev --host` | 開發模式，並監聽所有網路介面 |
 | `bun start` | 正式啟動，只監聽 `localhost` |
 | `bun start --host` | 監聽所有網路介面，區網裡的其他裝置也能連線 |
 | `bun test` | 整合測試，使用暫存資料庫，不會動到 `DB_DIR` |

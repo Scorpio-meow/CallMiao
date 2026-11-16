@@ -5,7 +5,7 @@ html {
 }
 
 body {
-	font-family: Segoe UI, Roboto, Arial;
+	font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
 	background: #0b1020;
 	color: #e3e7f1
 }
@@ -19,13 +19,22 @@ body {
 header,
 footer {
 	padding: 16px 24px;
-	background: #101938
+	background: #101938;
+	font-size: 20px;
+	font-weight: 600
+}
+
+footer {
+	color: #aab3cc;
+	font-size: 16px;
+	font-weight: 400
 }
 
 .calls {
 	flex: 1;
 	display: grid;
 	grid-template-columns: repeat(2, 1fr);
+	align-content: start;
 	gap: 16px;
 	padding: 24px
 }
@@ -41,33 +50,40 @@ footer {
 }
 
 .row.empty {
-	justify-content: center
+	grid-column: 1 / -1;
+	justify-content: center;
+	color: #aab3cc;
+	font-size: 28px
 }
 
 .num {
 	font-size: 56px;
-	font-weight: 700
+	font-weight: 700;
+	font-variant-numeric: tabular-nums
 }
 
 .ctr {
-	font-size: 28px
+	font-size: 28px;
+	font-variant-numeric: tabular-nums
 }
 
 .enable-sound {
 	position: fixed;
-	right: 16px;
-	bottom: 16px;
-	z-index: 9999;
-	background: #2b77ff;
+	right: max(16px, env(safe-area-inset-right));
+	bottom: max(16px, env(safe-area-inset-bottom));
+	z-index: 10;
+	min-height: 44px;
+	padding: 0 16px;
+	border: 1px solid #3b4a80;
+	border-radius: 6px;
+	background: #2563eb;
 	color: #fff;
-	border: none;
-	padding: 10px 14px;
-	border-radius: 8px;
-	box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
-	cursor: pointer;
-	font-size: 14px;
+	font: inherit;
+	font-size: 16px;
+	font-weight: 500;
+	cursor: pointer
 }
 
-.enable-sound:active {
-	transform: translateY(1px)
+.enable-sound:hover {
+	background: #1d4ed8
 }

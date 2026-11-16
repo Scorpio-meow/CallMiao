@@ -2,55 +2,51 @@
 <html lang="zh-Hant">
 
 <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>取號機 Kiosk</title>
-    <link rel="stylesheet" href="/kiosk/style.css" />
-    <script src="/socket.io/socket.io.js"></script>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>取號 - 叫號喵</title>
+  <link rel="stylesheet" href="/shared/base.css" />
+  <link rel="stylesheet" href="/kiosk/style.css" />
+  <script src="/socket.io/socket.io.js"></script>
 </head>
 
 <body>
-    <div class="container">
-        <header class="header">
-            <div class="brand">
-                <div class="logo" aria-label="LOGO">LOGO</div>
-            </div>
-            <div class="title">取號機</div>
-        </header>
-        <div class="notice">請輕觸螢幕按鍵取號，持號碼牌等候叫號，謝謝！</div>
-        <main class="main-grid">
-            <section class="service-area">
-                <div class="cards" id="cards"></div>
-            </section>
-        </main>
+  <main class="kiosk">
+    <header class="kiosk-header">
+      <span class="brand">叫號喵</span>
+      <h1>請選擇服務</h1>
+      <p class="muted">輕觸服務項目取號，並留意叫號看板</p>
+    </header>
+    <section class="cards" id="cards" aria-label="服務項目"></section>
+  </main>
+
+  <dialog id="serviceModal" class="sheet" aria-labelledby="modalTitle" aria-describedby="modalDesc">
+    <div class="sheet-body">
+      <h2 id="modalTitle" class="sheet-title">取號</h2>
+      <p id="modalDesc" class="muted"></p>
+      <p id="modalError" class="alert alert-danger hidden" role="alert"></p>
     </div>
-    <!-- Service Selection Modal -->
-    <div id="serviceModal" class="modal hidden" role="dialog" aria-modal="true">
-        <div class="modal-card">
-            <h3 id="modalTitle">取號</h3>
-            <p>請確認您要取號的服務類型</p>
-            <div class="actions">
-                <button id="cancelModal" class="btn">取消</button>
-                <button id="confirmModal" class="btn btn-primary">確定取號</button>
-            </div>
-        </div>
+    <div class="sheet-actions">
+      <button id="cancelModal" class="btn sheet-secondary" type="button">取消</button>
+      <button id="confirmModal" class="btn btn-primary sheet-primary" type="button">確定取號</button>
     </div>
-    <!-- Result Modal -->
-    <div id="resultModal" class="modal hidden" role="dialog" aria-modal="true">
-        <div class="modal-card">
-            <section id="result" class="result">
-                <h2>已取號</h2>
-                <p>您的號碼：<strong id="number"></strong></p>
-                <img id="qrcode" alt="QR code" />
-                <p>票券連結：<a id="ticketLink" target="_blank"></a></p>
-                <p class="note">請攜帶此 QR 至櫃台出示；亦可隨時回到此連結查看進度。</p>
-                <div class="actions">
-                    <button id="closeResult" class="btn btn-primary">關閉</button>
-                </div>
-            </section>
-        </div>
+  </dialog>
+
+  <dialog id="resultModal" class="sheet" aria-labelledby="resultTitle">
+    <div class="sheet-body result">
+      <h2 id="resultTitle" class="sheet-title">取號完成</h2>
+      <p class="muted">您的號碼</p>
+      <p id="number" class="ticket-number tabular"></p>
+      <img id="qrcode" class="qrcode" alt="票券追蹤 QR Code" width="160" height="160" />
+      <p class="muted">用手機掃描 QR Code，即可隨時查看叫號進度</p>
+      <a id="ticketLink" class="ticket-link" target="_blank" rel="noopener"></a>
     </div>
-    <script src="/kiosk/index.js"></script>
+    <div class="sheet-actions">
+      <button id="closeResult" class="btn btn-primary sheet-primary" type="button">完成</button>
+    </div>
+  </dialog>
+
+  <script src="/kiosk/index.js"></script>
 </body>
 
 </html>

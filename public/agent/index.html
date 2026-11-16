@@ -1,98 +1,217 @@
 <!doctype html>
 <html lang="zh-Hant">
+
 <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>櫃員端</title>
-    <link rel="stylesheet" href="/agent/style.css" />
-    <script src="/socket.io/socket.io.js"></script>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>櫃員工作台 - 叫號喵</title>
+  <link rel="stylesheet" href="/shared/base.css" />
+  <link rel="stylesheet" href="/agent/style.css" />
+  <script src="/socket.io/socket.io.js"></script>
 </head>
+
 <body>
-    <div class="container agent-red">
-        <div class="agent-header">
-            <div class="left">
-                <h1 class="title">櫃員設定</h1>
-                <div class="agent-meta">
-                    <span>服務人員：</span><strong id="agentNameDisplay">—</strong>
-                </div>
-            </div>
-            <div class="right">
-                <div class="auth compact">
-                    <button class="btn btn-light" id="logoutBtn" title="登出">登出</button>
-                    <span id="authStatus" class="muted"></span>
-                </div>
-            </div>
-        </div>
-        <div class="top-info">
-            <div class="info-grid">
-                <div class="info-field">
-                    <label>目前叫號</label>
-                    <input id="currentCallField" readonly placeholder="—" />
-                </div>
-                <div class="info-field">
-                    <label>等候時間</label>
-                    <input id="waitTimeField" readonly placeholder="—" />
-                </div>
-                <div class="info-field">
-                    <label>服務時間</label>
-                    <input id="serviceTimeField" readonly placeholder="—" />
-                </div>
-                <div class="info-field smallctrl">
-                    <label>櫃台號（由管理員設定）</label>
-                    <div class="counter-group">
-                        <input id="counter" placeholder="1" readonly />
-                    </div>
-                </div>
-            </div>
-            <div class="stat">
-                <div class="label">總等待人數</div>
-                <div class="value" id="totalWaitCount">0</div>
-            </div>
-        </div>
-        <table class="w-100">
-            <td class="w-49">
-                <div class="footer-info">
-                    <div class="clock" id="clock">—</div>
-                    <h3 class="section-title">客戶等候名單</h3>
-                    <div id="categoryList" class="category-list"></div>
-                </div>
-            </td>
-            <td class="w-49">
-                <div class="ops-grid">
-                    <button class="btn btn-primary op" id="callNext" title="N">叫號</button>
-                    <button class="btn btn-secondary op" id="markServing" title="S">開始服務</button>
-                    <button class="btn btn-primary op outline" id="recall" title="R">重叫號</button>
-                    <button class="btn btn-success op" id="finish" title="F">結束服務</button>
-                    <button class="btn btn-danger op" id="cancel" title="X">取消叫號</button>
-                    <button class="btn btn-light op" id="transfer">轉櫃/轉服務</button>
-                    <button class="btn btn-light op" id="createTicket">櫃檯取號</button>
-                    <button class="btn btn-light op" id="pickup">未取號補取</button>
-                    <button class="btn btn-light op" id="internalCall">內部叫號</button>
-                    <button class="btn btn-light op" id="pause">暫停服務</button>
-                    <button class="btn btn-light op" id="callSpecific">指定叫號</button>
-                    <button class="btn btn-light op" id="history">歷史叫號查詢</button>
-                    <button class="btn btn-light op" id="message">密傳訊息</button>
-                </div>
-                <div class="verify-line">
-                    <input id="ticketId" placeholder="ticket number" />
-                    <button id="pickFromInput" class="btn btn-light">選取</button>
-                    <input type="hidden" id="ticketInternalId" />
-                    <input type="hidden" id="serviceType" />
-                </div>
-                <div id="selectedInfo" class="service-compact muted mt-8"></div>
-            </td>
-        </table>
+  <header class="app-header">
+    <div class="app-brand">
+      <span>叫號喵</span>
+      <span class="divider" aria-hidden="true"></span>
+      <span class="section">櫃員工作台</span>
     </div>
-    <div id="toaster" class="toaster"></div>
-    <div id="historyModal" class="auth-overlay hidden">
-        <div class="auth-card w-640 maxh-70vh overflow-auto">
-            <h2>歷史叫號</h2>
-            <div id="historyBody" class="muted">載入中…</div>
-            <div class="actions mt-12 flex-end gap-8">
-                <button id="historyClose" class="btn btn-light">關閉</button>
-            </div>
-        </div>
+    <div class="app-header-actions">
+      <span id="clock" class="clock tabular muted"></span>
+      <span class="agent-chip">
+        <span id="agentNameDisplay">—</span>
+        <span class="badge badge-brand">櫃台 <span id="counter">—</span></span>
+      </span>
+      <button id="logoutBtn" class="btn btn-ghost" type="button">登出</button>
     </div>
-    <script src="/agent/index.js"></script>
+  </header>
+
+  <main class="workbench">
+    <aside class="card queue-card" aria-labelledby="queueTitle">
+      <div class="card-header">
+        <h2 id="queueTitle" class="card-title">等候名單</h2>
+        <span class="muted">共 <span id="totalWaitCount" class="tabular">0</span> 人</span>
+      </div>
+      <div id="categoryList" class="queue-list" role="listbox" aria-labelledby="queueTitle"></div>
+      <input type="hidden" id="serviceType" />
+    </aside>
+
+    <div class="workbench-main">
+      <section class="card kpi-grid" aria-label="目前狀態">
+        <div class="kpi">
+          <span class="kpi-label">目前叫號</span>
+          <span class="kpi-value tabular" id="currentCallField">—</span>
+        </div>
+        <div class="kpi">
+          <span class="kpi-label">服務時間</span>
+          <span class="kpi-value tabular"><span id="serviceTimeField">—</span><span id="serviceTimeUnit" class="kpi-unit hidden">分鐘</span></span>
+        </div>
+        <div class="kpi">
+          <span class="kpi-label">首位已等候</span>
+          <span class="kpi-value tabular"><span id="waitTimeField">—</span><span id="waitTimeUnit" class="kpi-unit hidden">分鐘</span></span>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="actionsTitle">
+        <div class="card-header">
+          <h2 id="actionsTitle" class="card-title">叫號操作</h2>
+        </div>
+        <div class="card-body actions-body">
+          <div class="call-row">
+            <button id="callNext" class="btn btn-primary btn-call" type="button">叫下一位<span class="kbd">N</span></button>
+            <span class="muted">從「<span id="activeServiceName">—</span>」叫號</span>
+          </div>
+
+          <div class="action-group">
+            <h3 class="action-group-title">目前票券</h3>
+            <form id="pickForm" class="selection" novalidate>
+              <label class="sr-only" for="ticketId">票券號碼</label>
+              <input id="ticketId" class="input ticket-input" placeholder="輸入號碼，例如 A001" autocomplete="off" autocapitalize="characters" spellcheck="false" />
+              <button id="pickFromInput" class="btn" type="submit">選取</button>
+              <span id="selectedInfo" class="selected-info muted">尚未選取票券</span>
+            </form>
+            <div class="action-buttons">
+              <button id="markServing" class="btn" type="button">開始服務<span class="kbd">S</span></button>
+              <button id="recall" class="btn" type="button">重叫</button>
+              <button id="finish" class="btn" type="button">結束服務<span class="kbd">F</span></button>
+              <button id="transfer" class="btn" type="button">轉櫃／轉服務</button>
+              <button id="pause" class="btn" type="button">暫停服務</button>
+              <button id="cancel" class="btn btn-text-danger" type="button">取消叫號<span class="kbd">X</span></button>
+            </div>
+          </div>
+
+          <div class="action-group">
+            <h3 class="action-group-title">其他</h3>
+            <div class="action-buttons">
+              <button id="callSpecific" class="btn" type="button">指定叫號</button>
+              <button id="internalCall" class="btn" type="button">內部叫號</button>
+              <button id="createTicket" class="btn" type="button">櫃台取號</button>
+              <button id="pickup" class="btn" type="button">未取號補取</button>
+              <button id="history" class="btn" type="button">歷史紀錄</button>
+              <button id="message" class="btn" type="button">傳送訊息</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <dialog id="finishDialog" class="modal" aria-labelledby="finishTitle">
+    <form id="finishForm" class="modal-form" novalidate>
+      <div class="modal-header">
+        <h2 id="finishTitle" class="modal-title"></h2>
+      </div>
+      <div class="modal-body">
+        <div class="field">
+          <label for="finishResult">處理結果</label>
+          <textarea id="finishResult" class="input" rows="3"></textarea>
+          <span class="field-help">選填，會記錄在歷史紀錄中</span>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" type="button" data-close>取消</button>
+        <button class="btn btn-primary" type="submit">結束服務</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="cancelDialog" class="modal" role="alertdialog" aria-labelledby="cancelTitle" aria-describedby="cancelDesc">
+    <form id="cancelForm" class="modal-form" novalidate>
+      <div class="modal-header">
+        <h2 id="cancelTitle" class="modal-title"></h2>
+      </div>
+      <div class="modal-body">
+        <p id="cancelDesc" class="muted">取消後無法復原，顧客需要重新取號。</p>
+        <div class="field">
+          <label for="cancelReason">取消原因</label>
+          <textarea id="cancelReason" class="input" rows="3"></textarea>
+          <span class="field-help">選填</span>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" type="button" data-close>返回</button>
+        <button class="btn btn-danger" type="submit">取消這張票</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="transferDialog" class="modal" aria-labelledby="transferTitle">
+    <form id="transferForm" class="modal-form" novalidate>
+      <div class="modal-header">
+        <h2 id="transferTitle" class="modal-title"></h2>
+      </div>
+      <div class="modal-body">
+        <div class="field">
+          <label for="transferService">轉到服務別</label>
+          <select id="transferService" class="input"></select>
+        </div>
+        <div class="field">
+          <span id="transferKeepLabel" class="field-label">票券狀態</span>
+          <div class="segmented" role="radiogroup" aria-labelledby="transferKeepLabel">
+            <label><input type="radio" name="transferKeep" value="keep" checked />保留狀態與叫號時間</label>
+            <label><input type="radio" name="transferKeep" value="reset" />放回等候</label>
+          </div>
+        </div>
+        <div class="field" id="transferCounterField">
+          <label for="transferCounter">指定櫃台</label>
+          <input id="transferCounter" class="input" placeholder="例如 2" autocomplete="off" />
+          <span class="field-help">選填，只能用在已叫號或服務中的票</span>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" type="button" data-close>取消</button>
+        <button class="btn btn-primary" type="submit">確定轉出</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="messageDialog" class="modal" aria-labelledby="messageTitle">
+    <form id="messageForm" class="modal-form" novalidate>
+      <div class="modal-header">
+        <h2 id="messageTitle" class="modal-title">傳送訊息</h2>
+      </div>
+      <div class="modal-body">
+        <div class="field">
+          <span id="messageTargetLabel" class="field-label">傳給</span>
+          <div class="segmented" role="radiogroup" aria-labelledby="messageTargetLabel">
+            <label><input type="radio" name="messageTarget" value="all" checked />全體櫃員</label>
+            <label><input type="radio" name="messageTarget" value="counter" />指定櫃台</label>
+            <label><input type="radio" name="messageTarget" value="agent" />指定人員</label>
+          </div>
+        </div>
+        <div class="field hidden" id="messageCounterField">
+          <label for="messageCounter">櫃台號</label>
+          <input id="messageCounter" class="input" placeholder="例如 2" autocomplete="off" />
+        </div>
+        <div class="field hidden" id="messageAgentField">
+          <label for="messageAgent">人員姓名</label>
+          <input id="messageAgent" class="input" autocomplete="off" />
+          <span class="field-help">需與對方的顯示名稱完全相同</span>
+        </div>
+        <div class="field">
+          <label for="messageText">訊息內容</label>
+          <textarea id="messageText" class="input" rows="3"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" type="button" data-close>取消</button>
+        <button class="btn btn-primary" type="submit">送出</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="historyDrawer" class="drawer" aria-labelledby="historyTitle">
+    <div class="drawer-header">
+      <h2 id="historyTitle" class="modal-title">歷史紀錄</h2>
+      <button id="historyClose" class="btn btn-ghost" type="button">關閉</button>
+    </div>
+    <div id="historyBody" class="drawer-body"></div>
+  </dialog>
+
+  <div id="toaster" class="toast-region" aria-live="polite"></div>
+  <script src="/shared/ui.js"></script>
+  <script src="/agent/index.js"></script>
 </body>
+
 </html>

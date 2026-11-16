@@ -225,6 +225,7 @@ CallMiao/
 │   ├── sqlite.js              # 依執行環境選用 bun:sqlite 或 better-sqlite3
 │   └── session-store.js       # express-session 的 SQLite Store
 ├── public/                    # 前端靜態頁面（每個資料夾都有 index.js 與 style.css）
+│   ├── shared/                # 共用樣式 base.css（大廳看板除外）與浮動通知 ui.js
 │   ├── kiosk/                 # 取號機；widget.js 供其他網站嵌入
 │   ├── agent/                 # 櫃員工作台
 │   ├── lobby/                 # 大廳看板與語音播報

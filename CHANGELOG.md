@@ -2,12 +2,21 @@
 
 本專案的所有重要變更都記錄在這裡。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循[語意化版本](https://semver.org/lang/zh-TW/)。
 
-## [未發佈]
+## [2.1.0] - 2026-11-16
+
+前端依後台與行動版設計規範全面改版，並改為直接用 Bun 執行。API、資料庫與必填環境變數都沒有變動，可直接升級。
 
 ### 變更
 
 - 文件重新整理：README 改為精簡的入門說明，詳細內容拆到 `docs/` 下的設定、API、架構與部署指南；`SECURITY-UPDATE.md` 改為 `SECURITY.md`，更新紀錄移到本檔案。
 - 修正文件與實際行為不符之處：Node.js 需求改為 22 以上、建立管理員改用 Bun 指令、大廳看板功能描述、`POST /api/agents` 的欄位與 `/api/logout` 的認證需求。
+- 前端依後台與行動版設計規範改版：大廳看板以外的頁面共用 `public/shared/base.css`；櫃員工作台與管理後台改用對話框取代 `prompt()`、`confirm()` 與 `alert()`；取號機與手機票券頁加上安全區避讓、48px 觸控熱區與底部面板。
+- npm scripts 直接用 Bun 執行：`start` 改為 `bun server.js`，`dev` 改用 Bun 內建的 `--watch`，移除 `nodemon`；`engines` 標明 Node.js 22 以上。
+- 文件補充 `TRUST_PROXY=loopback`（搭配 Dev Tunnels 等本機通道）與重設密碼的指令。
+
+### 修正
+
+- 在沒有安裝 Node.js 的電腦上，`bun run dev`／`bun start` 會讀不到 `.env` 裡的 `TZ` 而拒絕啟動；改為直接用 Bun 執行後解決。
 
 ## [2.0.0] - 2026-11-15
 

@@ -1,145 +1,195 @@
+const $ = (id) => document.getElementById(id);
+const ERROR_TEXT = {
+  'account exists': '帳號已存在',
+  'account and password required': '請輸入帳號與密碼',
+  'name already in use': '姓名已被其他帳號使用',
+  'cannot demote or deactivate your own account': '無法變更自己的角色或停用自己',
+  'cannot delete your own account': '無法刪除自己的帳號',
+  'current password required': '目前密碼不正確',
+  'not found': '找不到這個帳號'
+};
 let me = null;
+let AGENTS = [];
+let EDITING_AGENT = null;
 function displayName(agent) { return agent.name || agent.account; }
-function showMsg(text, err) {
-  const el = document.getElementById('msg');
-  el.textContent = text;
-  el.classList.remove('hidden');
-  el.classList.remove('ok', 'error');
-  el.classList.add(err ? 'error' : 'ok');
-  setTimeout(() => el.classList.add('hidden'), 4000);
-}
-async function init() {
-  const res = await apiFetch('/api/agent/profile', { method: 'GET' });
-  if (res.status === 401) {
-    location.href = `/login/index.html?redirect=${encodeURIComponent(location.pathname)}`;
-    return;
-  }
-  if (!res.ok) return showMsg('載入個人資料失敗', true);
-  me = (await res.json()).agent;
-  if (me.role === 'admin') initializeAdminInterface();
-  else initializeAgentInterface();
+function errorText(error) { return ERROR_TEXT[error] || error; }
+function showMsg(text, err) { toast(text, err ? 'error' : 'success', 4000); }
+function confirmAction({ title, description, confirmText }) {
+  const dialog = $('confirmDialog');
+  $('confirmTitle').textContent = title;
+  $('confirmDesc').textContent = description;
+  $('confirmOk').textContent = confirmText;
+  dialog.returnValue = '';
+  dialog.showModal();
+  return new Promise((resolve) => {
+    dialog.addEventListener('close', () => resolve(dialog.returnValue === 'ok'), { once: true });
+  });
 }
 async function apiFetch(url, opts = {}) {
-  opts = Object.assign({
-    headers: {},
-    credentials: 'include'
-  }, opts);
+  opts = Object.assign({ headers: {}, credentials: 'include' }, opts);
   if (!opts.headers['Content-Type']) opts.headers['Content-Type'] = 'application/json';
-  return fetch(url, opts);
+  const res = await fetch(url, opts);
+  if (res.status === 401) location.href = `/login/index.html?redirect=${encodeURIComponent(location.pathname)}`;
+  return res;
 }
 async function getCsrfToken() {
   try {
     const res = await apiFetch('/api/csrf', { method: 'GET' });
-    if (!res.ok) {
-      console.error('Failed to fetch CSRF token, status:', res.status);
-      return null;
-    }
-    const data = await res.json();
-    return data.csrfToken;
+    if (!res.ok) return null;
+    return (await res.json()).csrfToken;
   } catch (err) {
     console.error('Failed to get CSRF token:', err);
     return null;
   }
 }
-let AGENTS = [];
-let EDITING_AGENT = null;
-function isSelf(agent) {
-  return agent.id === me.id;
-}
-function makeBadge(text, cls) {
+function isSelf(agent) { return agent.id === me.id; }
+function makeBadge(text, variant) {
   const span = document.createElement('span');
-  span.className = `badge ${cls}`;
+  span.className = variant ? `badge badge-${variant}` : 'badge';
   span.textContent = text;
   return span;
 }
+function makeButton(text, className, onClick) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = className;
+  btn.textContent = text;
+  btn.onclick = onClick;
+  return btn;
+}
+function renderState(kind, title, actionText, onAction) {
+  const wrap = $('agentsWrap');
+  wrap.textContent = '';
+  const box = document.createElement('div');
+  box.className = 'empty-state';
+  const strong = document.createElement('strong');
+  strong.textContent = title;
+  box.appendChild(strong);
+  if (actionText) box.appendChild(makeButton(actionText, kind === 'empty' ? 'btn btn-primary' : 'btn', onAction));
+  wrap.appendChild(box);
+}
 function renderAgents() {
-  const wrap = document.getElementById('agentsWrap');
-  const keyword = document.getElementById('agentFilter').value.trim().toLowerCase();
+  const wrap = $('agentsWrap');
+  const rawKeyword = $('agentFilter').value.trim();
+  const keyword = rawKeyword.toLowerCase();
   const rows = AGENTS.filter(a => !keyword || [a.account, a.name, a.counter].some(v => (v || '').toLowerCase().includes(keyword)));
-  if (rows.length === 0) return wrap.innerHTML = `<div class="muted">${AGENTS.length === 0 ? '無帳號' : '沒有符合的帳號'}</div>`;
+  $('agentCount').textContent = keyword ? `${rows.length} / ${AGENTS.length} 個帳號` : `共 ${AGENTS.length} 個帳號`;
+  if (AGENTS.length === 0) return renderState('empty', '還沒有任何帳號', '新增帳號', openCreateDialog);
+  if (rows.length === 0) {
+    return renderState('filter', `沒有符合「${rawKeyword}」的帳號`, '清除搜尋', () => { $('agentFilter').value = ''; renderAgents(); });
+  }
   const table = document.createElement('table');
+  table.className = 'table';
   const thead = document.createElement('thead');
-  thead.innerHTML = '<tr><th>帳號</th><th>姓名</th><th>櫃台</th><th>角色</th><th>狀態</th><th></th></tr>';
+  const headRow = document.createElement('tr');
+  [['帳號', ''], ['姓名', ''], ['櫃台', ''], ['角色', ''], ['狀態', ''], ['操作', 'actions']].forEach(([text, cls]) => {
+    const th = document.createElement('th');
+    th.textContent = text;
+    if (cls) th.className = cls;
+    headRow.appendChild(th);
+  });
+  thead.appendChild(headRow);
   table.appendChild(thead);
   const tbody = document.createElement('tbody');
   for (const a of rows) {
     const tr = document.createElement('tr');
     if (!a.active) tr.className = 'inactive';
-    tr.title = '點兩下編輯';
     tr.ondblclick = () => openEditDialog(a);
-    const tdAccount = document.createElement('td'); tdAccount.textContent = a.account || '';
-    if (isSelf(a)) tdAccount.appendChild(makeBadge('你', 'self'));
+    const tdAccount = document.createElement('td');
+    const accountCell = document.createElement('span');
+    accountCell.className = 'account-cell';
+    accountCell.append(a.account || '');
+    if (isSelf(a)) accountCell.appendChild(makeBadge('你', 'brand'));
+    tdAccount.appendChild(accountCell);
     tr.appendChild(tdAccount);
     const tdName = document.createElement('td'); tdName.textContent = a.name || '-'; tr.appendChild(tdName);
     const tdCounter = document.createElement('td'); tdCounter.textContent = a.counter || '-'; tr.appendChild(tdCounter);
     const tdRole = document.createElement('td');
-    tdRole.appendChild(a.role === 'admin' ? makeBadge('管理員', 'admin') : makeBadge('一般櫃員', 'agent'));
+    tdRole.appendChild(a.role === 'admin' ? makeBadge('管理員', 'info') : makeBadge('一般櫃員'));
     tr.appendChild(tdRole);
     const tdActive = document.createElement('td');
-    tdActive.appendChild(a.active ? makeBadge('啟用', 'on') : makeBadge('停用', 'off'));
+    tdActive.appendChild(a.active ? makeBadge('啟用', 'success') : makeBadge('停用'));
     tr.appendChild(tdActive);
     const tdActions = document.createElement('td');
-    tdActions.className = 'row-actions';
-    const editBtn = document.createElement('button'); editBtn.className = 'small'; editBtn.textContent = '編輯';
-    editBtn.onclick = () => openEditDialog(a);
-    tdActions.appendChild(editBtn);
-    if (!isSelf(a)) {
-      const delBtn = document.createElement('button'); delBtn.className = 'small danger'; delBtn.textContent = '刪除';
-      delBtn.onclick = () => onDelete(a);
-      tdActions.appendChild(delBtn);
-    }
+    tdActions.className = 'actions';
+    tdActions.appendChild(makeButton('編輯', 'btn btn-ghost btn-sm', () => openEditDialog(a)));
+    if (!isSelf(a)) tdActions.appendChild(makeButton('刪除', 'btn btn-ghost btn-sm btn-text-danger', () => onDelete(a)));
     tr.appendChild(tdActions);
     tbody.appendChild(tr);
   }
   table.appendChild(tbody);
-  wrap.innerHTML = ''; wrap.appendChild(table);
+  wrap.textContent = '';
+  wrap.appendChild(table);
 }
 async function loadAgents() {
-  const wrap = document.getElementById('agentsWrap');
+  if (AGENTS.length === 0) renderState('loading', '載入中…');
   try {
     const res = await apiFetch('/api/agents', { method: 'GET' });
     const data = await res.json();
-    if (data.error) return wrap.textContent = `錯誤: ${data.error}`;
+    if (data.error) return renderState('error', `無法載入帳號：${errorText(data.error)}`, '重試', loadAgents);
     AGENTS = data.agents || [];
     renderAgents();
-  } catch (err) { wrap.innerHTML = `<div class="muted">載入失敗</div>`; console.error(err); }
+  } catch (err) {
+    console.error(err);
+    renderState('error', '無法載入帳號，請檢查網路連線', '重試', loadAgents);
+  }
 }
+function roleText(agent) { return agent.role === 'admin' ? '管理員' : '一般櫃員'; }
 function renderProfile() {
-  document.getElementById('profileName').value = me.name || '';
-  document.getElementById('profileRole').textContent = me.role === 'admin' ? '管理員' : '一般櫃員';
-  document.getElementById('profileAccount').textContent = me.account || '-';
-  document.getElementById('profileDisplayName').textContent = me.name || '-';
-  document.getElementById('profileDisplayCounter').textContent = me.counter || '-';
-  document.getElementById('loginStatus').textContent = `已登入為${me.role === 'admin' ? '管理員' : '櫃員'} - ${displayName(me)}`;
+  $('profileName').value = me.name || '';
+  $('profileRole').textContent = roleText(me);
+  $('profileAccount').textContent = me.account || '-';
+  $('profileDisplayName').textContent = me.name || '-';
+  $('profileDisplayCounter').textContent = me.counter || '-';
+  $('loginStatus').textContent = displayName(me);
+  const badge = $('roleBadge');
+  badge.textContent = roleText(me);
+  badge.className = me.role === 'admin' ? 'badge badge-info' : 'badge';
+}
+function setRadio(name, value) {
+  document.querySelectorAll(`input[name="${name}"]`).forEach(input => { input.checked = input.value === value; });
+}
+function radioValue(name) {
+  const checked = document.querySelector(`input[name="${name}"]:checked`);
+  return checked ? checked.value : '';
+}
+function openCreateDialog() {
+  $('createForm').reset();
+  $('createDialog').showModal();
+  $('newAccount').focus();
+}
+function closeCreateDialog() {
+  $('createForm').reset();
+  $('createDialog').close();
 }
 function openEditDialog(agent) {
   EDITING_AGENT = agent;
   const self = isSelf(agent);
-  document.getElementById('editAccount').textContent = agent.account || '';
-  document.getElementById('editName').value = agent.name || '';
-  document.getElementById('editCounter').value = agent.counter || '';
-  document.getElementById('editRole').value = agent.role === 'admin' ? 'admin' : '';
-  document.getElementById('editActive').checked = Boolean(agent.active);
-  document.getElementById('editPassword').value = '';
-  document.getElementById('editRole').disabled = self;
-  document.getElementById('editActive').disabled = self;
-  document.getElementById('editSelfNote').classList.toggle('hidden', !self);
-  document.getElementById('editDialog').showModal();
-  document.getElementById('editName').focus();
+  $('editAccount').textContent = agent.account || '';
+  $('editName').value = agent.name || '';
+  $('editCounter').value = agent.counter || '';
+  setRadio('editRole', agent.role === 'admin' ? 'admin' : '');
+  $('editActive').checked = Boolean(agent.active);
+  $('editPassword').value = '';
+  document.querySelectorAll('input[name="editRole"]').forEach(input => { input.disabled = self; });
+  $('editActive').disabled = self;
+  $('editSelfNote').classList.toggle('hidden', !self);
+  $('editDialog').showModal();
+  $('editName').focus();
 }
 function closeEditDialog() {
-  document.getElementById('editPassword').value = '';
-  document.getElementById('editDialog').close();
+  $('editPassword').value = '';
+  $('editDialog').close();
   EDITING_AGENT = null;
 }
 async function saveEdit() {
   const agent = EDITING_AGENT;
   if (!agent) return;
-  const name = document.getElementById('editName').value.trim();
-  const counter = document.getElementById('editCounter').value.trim();
-  const role = document.getElementById('editRole').value;
-  const active = document.getElementById('editActive').checked ? 1 : 0;
-  const password = document.getElementById('editPassword').value;
+  const name = $('editName').value.trim();
+  const counter = $('editCounter').value.trim();
+  const role = radioValue('editRole');
+  const active = $('editActive').checked ? 1 : 0;
+  const password = $('editPassword').value;
   const body = {};
   if (name !== (agent.name || '')) body.name = name;
   if (counter !== (agent.counter || '')) body.counter = counter;
@@ -147,60 +197,130 @@ async function saveEdit() {
   if (active !== (agent.active ? 1 : 0)) body.active = active;
   if (password) body.password = password;
   if (Object.keys(body).length === 0) return closeEditDialog();
-  if (body.active === 0 && !confirm(`停用「${agent.account}」會立即登出該帳號，確定？`)) return;
-  const saveBtn = document.getElementById('editSave');
+  if (body.active === 0) {
+    const ok = await confirmAction({
+      title: `停用帳號「${agent.account}」`,
+      description: '停用後，這個帳號會立即被登出，也無法再登入，直到重新啟用。',
+      confirmText: '停用帳號'
+    });
+    if (!ok) return;
+  }
+  const saveBtn = $('editSave');
   saveBtn.disabled = true;
   try {
     const csrfToken = await getCsrfToken();
-    if (!csrfToken) return showMsg('無法取得 CSRF token', true);
+    if (!csrfToken) return showMsg('無法取得 CSRF Token，請重新整理頁面', true);
     const res = await apiFetch(`/api/agents/${agent.id}`, {
       method: 'PUT',
-      headers: {
-        'x-csrf-token': csrfToken
-      },
+      headers: { 'x-csrf-token': csrfToken },
       body: JSON.stringify(body)
     });
     const data = await res.json();
-    if (data.error) return showMsg('修改失敗: ' + data.error, true);
+    if (data.error) return showMsg(`儲存失敗：${errorText(data.error)}`, true);
     showMsg(`已更新「${agent.account}」`);
     closeEditDialog();
     loadAgents();
-  } catch (err) { showMsg('修改失敗', true); } finally { saveBtn.disabled = false; }
+  } catch (err) {
+    showMsg('儲存失敗，請稍後再試', true);
+  } finally {
+    saveBtn.disabled = false;
+  }
 }
 async function onDelete(agent) {
-  const id = agent.id;
-  if (!confirm(`確定刪除帳號「${agent.account}」？此動作無法復原。`)) return;
+  const ok = await confirmAction({
+    title: `刪除帳號「${agent.account}」`,
+    description: '刪除後無法復原，這個帳號將無法再登入。若只是暫時不用，建議改為停用。',
+    confirmText: '刪除帳號'
+  });
+  if (!ok) return;
   try {
     const csrfToken = await getCsrfToken();
-    if (!csrfToken) return showMsg('無法取得 CSRF token', true);
-    const res = await apiFetch(`/api/agents/${id}`, {
+    if (!csrfToken) return showMsg('無法取得 CSRF Token，請重新整理頁面', true);
+    const res = await apiFetch(`/api/agents/${agent.id}`, {
       method: 'DELETE',
-      headers: {
-        'x-csrf-token': csrfToken
-      }
+      headers: { 'x-csrf-token': csrfToken }
     });
     const data = await res.json();
-    if (data.error) return showMsg('刪除失敗: ' + data.error, true);
-    showMsg('已刪除');
+    if (data.error) return showMsg(`刪除失敗：${errorText(data.error)}`, true);
+    showMsg(`已刪除「${agent.account}」`);
     loadAgents();
-  } catch (err) { showMsg('刪除失敗', true); }
+  } catch (err) {
+    showMsg('刪除失敗，請稍後再試', true);
+  }
 }
-function initializeAdminInterface() {
-  document.getElementById('loginRedirect').classList.add('hidden');
-  document.getElementById('mainArea').classList.remove('hidden');
-  document.getElementById('adminSection').classList.remove('hidden');
-  document.getElementById('profileSection').classList.add('hidden');
-  document.getElementById('pageTitle').textContent = '帳號管理（管理員）';
-  renderProfile();
-  loadAgents();
+async function createAgent() {
+  const account = $('newAccount').value.trim();
+  const name = $('newName').value.trim();
+  const password = $('newPassword').value;
+  const counter = $('newCounter').value.trim();
+  const role = radioValue('newRole');
+  if (!account || !password) return showMsg('請輸入帳號與密碼', true);
+  const btn = $('createBtn');
+  btn.disabled = true;
+  try {
+    const csrfToken = await getCsrfToken();
+    if (!csrfToken) return showMsg('無法取得 CSRF Token，請重新整理頁面', true);
+    const res = await apiFetch('/api/agents', {
+      method: 'POST',
+      headers: { 'x-csrf-token': csrfToken },
+      body: JSON.stringify({ account, name, password, counter, role })
+    });
+    const data = await res.json();
+    if (data.error) return showMsg(`建立失敗：${errorText(data.error)}`, true);
+    showMsg(`已建立「${account}」`);
+    closeCreateDialog();
+    loadAgents();
+  } catch (err) {
+    showMsg('建立失敗，請稍後再試', true);
+  } finally {
+    btn.disabled = false;
+  }
 }
-function initializeAgentInterface() {
-  document.getElementById('loginRedirect').classList.add('hidden');
-  document.getElementById('mainArea').classList.remove('hidden');
-  document.getElementById('adminSection').classList.add('hidden');
-  document.getElementById('profileSection').classList.remove('hidden');
-  document.getElementById('pageTitle').textContent = '個人資料管理';
+async function updateProfile() {
+  const name = $('profileName').value.trim();
+  const password = $('profilePassword').value;
+  const currentPassword = $('profileCurrentPassword').value;
+  const body = {};
+  if (name !== (me.name || '')) body.name = name;
+  if (password) {
+    if (!currentPassword) return showMsg('變更密碼需輸入目前密碼', true);
+    body.password = password;
+    body.currentPassword = currentPassword;
+  }
+  if (Object.keys(body).length === 0) return showMsg('沒有需要儲存的變更', true);
+  const btn = $('updateProfileBtn');
+  btn.disabled = true;
+  try {
+    const csrfToken = await getCsrfToken();
+    if (!csrfToken) return showMsg('無法取得 CSRF Token，請重新整理頁面', true);
+    const res = await apiFetch('/api/agent/profile', {
+      method: 'PUT',
+      headers: { 'x-csrf-token': csrfToken },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (data.error) return showMsg(`儲存失敗：${errorText(data.error)}`, true);
+    showMsg('已儲存個人資料');
+    $('profilePassword').value = '';
+    $('profileCurrentPassword').value = '';
+    me = data.agent;
+    renderProfile();
+  } catch (err) {
+    showMsg('儲存失敗，請稍後再試', true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+function showMain(isAdmin) {
+  $('loginRedirect').classList.add('hidden');
+  $('mainArea').classList.remove('hidden');
+  $('adminSection').classList.toggle('hidden', !isAdmin);
+  $('openCreate').classList.toggle('hidden', !isAdmin);
+  $('profileSection').classList.toggle('hidden', isAdmin);
+  $('pageTitle').textContent = isAdmin ? '帳號管理' : '個人資料';
+  document.title = `${$('pageTitle').textContent} - 叫號喵`;
   renderProfile();
+  if (isAdmin) loadAgents();
 }
 async function logout() {
   try {
@@ -214,66 +334,20 @@ async function logout() {
   }
   location.href = '/login/index.html';
 }
-document.getElementById('logout').onclick = logout;
-document.getElementById('agentFilter').oninput = renderAgents;
-document.getElementById('editForm').onsubmit = (e) => { e.preventDefault(); saveEdit(); };
-document.getElementById('editCancel').onclick = closeEditDialog;
-document.getElementById('editDialog').oncancel = () => { EDITING_AGENT = null; document.getElementById('editPassword').value = ''; };
-document.getElementById('createBtn').onclick = async () => {
-  const account = document.getElementById('newAccount').value.trim();
-  const name = document.getElementById('newName').value.trim();
-  const password = document.getElementById('newPassword').value;
-  const counter = document.getElementById('newCounter').value.trim();
-  const role = document.getElementById('newRole').value;
-  if (!account || !password) return showMsg('account & password required', true);
-  try {
-    const csrfToken = await getCsrfToken();
-    if (!csrfToken) return showMsg('無法取得 CSRF token', true);
-    const res = await apiFetch('/api/agents', {
-      method: 'POST',
-      headers: {
-        'x-csrf-token': csrfToken
-      },
-      body: JSON.stringify({ account, name, password, counter, role })
-    });
-    const data = await res.json();
-    if (data.error) return showMsg('建立失敗: ' + data.error, true);
-    showMsg('建立成功');
-    document.getElementById('newAccount').value = '';
-    document.getElementById('newName').value = '';
-    document.getElementById('newPassword').value = '';
-    document.getElementById('newCounter').value = '';
-    document.getElementById('newRole').value = '';
-    loadAgents();
-  } catch (err) { showMsg('建立失敗', true); }
-};
-document.getElementById('updateProfileBtn').onclick = async () => {
-  const name = document.getElementById('profileName').value.trim();
-  const password = document.getElementById('profilePassword').value;
-  const currentPassword = document.getElementById('profileCurrentPassword').value;
-  const body = {};
-  if (name !== (me.name || '')) body.name = name;
-  if (password) {
-    if (!currentPassword) return showMsg('變更密碼需輸入目前密碼', true);
-    body.password = password;
-    body.currentPassword = currentPassword;
-  }
-  if (Object.keys(body).length === 0) return showMsg('沒有變更', true);
-  try {
-    const csrfToken = await getCsrfToken();
-    if (!csrfToken) return showMsg('無法取得 CSRF token', true);
-    const res = await apiFetch('/api/agent/profile', {
-      method: 'PUT',
-      headers: { 'x-csrf-token': csrfToken },
-      body: JSON.stringify(body)
-    });
-    const data = await res.json();
-    if (data.error) return showMsg('更新失敗: ' + data.error, true);
-    showMsg('更新成功');
-    document.getElementById('profilePassword').value = '';
-    document.getElementById('profileCurrentPassword').value = '';
-    me = data.agent;
-    renderProfile();
-  } catch (err) { showMsg('更新失敗', true); }
-};
+async function init() {
+  const res = await apiFetch('/api/agent/profile', { method: 'GET' });
+  if (res.status === 401) return;
+  if (!res.ok) return showMsg('載入個人資料失敗', true);
+  me = (await res.json()).agent;
+  showMain(me.role === 'admin');
+}
+$('logout').onclick = logout;
+$('openCreate').onclick = openCreateDialog;
+$('agentFilter').oninput = renderAgents;
+$('createForm').onsubmit = (e) => { e.preventDefault(); createAgent(); };
+$('createCancel').onclick = closeCreateDialog;
+$('editForm').onsubmit = (e) => { e.preventDefault(); saveEdit(); };
+$('editCancel').onclick = closeEditDialog;
+$('editDialog').oncancel = () => { EDITING_AGENT = null; $('editPassword').value = ''; };
+$('profileForm').onsubmit = (e) => { e.preventDefault(); updateProfile(); };
 window.addEventListener('load', init);

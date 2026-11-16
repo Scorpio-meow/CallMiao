@@ -3,33 +3,41 @@
 
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>叫號喵 CallMiao - 登入</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>登入 - 叫號喵</title>
+  <link rel="stylesheet" href="/shared/base.css" />
   <link rel="stylesheet" href="/login/style.css" />
 </head>
 
 <body>
-  <div class="page">
-    <div class="card">
-      <div class="brand">
-        <div class="logo" aria-label="LOGO">LOGO</div>
-      </div>
-      <h1 class="subtitle">叫號喵 CallMiao</h1>
-      <form id="loginForm" class="form" autocomplete="off">
-        <label>帳號</label>
-        <input id="account" placeholder="輸入帳號" />
-        <label>密碼</label>
-        <input id="password" type="password" placeholder="••••••" />
-        <label>驗證碼</label>
-        <div class="captcha-row">
-          <input id="captchaInput" placeholder="請輸入右側驗證碼" />
-          <img id="captchaImage" class="captcha-img" alt="captcha" title="重新產生，請點擊圖片" />
-        </div>
-        <div class="hint">重新產生，請點擊圖片</div>
-        <button type="submit" class="btn btn-dark">登入</button>
-      </form>
+  <main class="auth">
+    <div class="auth-heading">
+      <h1>叫號喵</h1>
+      <p class="muted">櫃員與管理員登入</p>
     </div>
-  </div>
+    <form id="loginForm" class="card auth-card" novalidate>
+      <div class="field">
+        <label for="account">帳號</label>
+        <input id="account" class="input" autocomplete="username" autocapitalize="off" spellcheck="false" />
+      </div>
+      <div class="field">
+        <label for="password">密碼</label>
+        <input id="password" class="input" type="password" autocomplete="current-password" />
+      </div>
+      <div class="field">
+        <label for="captchaInput">驗證碼</label>
+        <div class="captcha-row">
+          <input id="captchaInput" class="input" autocomplete="off" autocapitalize="off" spellcheck="false" />
+          <button id="captchaRefresh" class="captcha-btn" type="button" aria-label="換一張驗證碼">
+            <img id="captchaImage" alt="驗證碼圖片" />
+          </button>
+        </div>
+        <span class="field-help">看不清楚時，點圖片換一張</span>
+      </div>
+      <p id="loginError" class="alert alert-danger hidden" role="alert"></p>
+      <button id="loginBtn" type="submit" class="btn btn-primary btn-block">登入</button>
+    </form>
+  </main>
   <script src="/login/index.js"></script>
 </body>
 

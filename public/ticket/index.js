@@ -52,13 +52,8 @@ function setupNotifyUI() {
   const btn = document.getElementById('enableNotify');
   const statusEl = document.getElementById('notifyStatus');
   const reflect = () => {
-    if (notifyEnabled) {
-      btn.style.display = 'none';
-      statusEl.textContent = '提醒已啟用（若瀏覽器支援）';
-    } else {
-      btn.style.display = '';
-      statusEl.textContent = '';
-    }
+    btn.classList.toggle('hidden', notifyEnabled);
+    statusEl.classList.toggle('hidden', !notifyEnabled);
   };
   btn.addEventListener('click', async () => {
     try {
@@ -75,22 +70,53 @@ function setupNotifyUI() {
   reflect();
 }
 const STATUS_LABEL = {
-  waiting: '等候',
+  waiting: '等候中',
   called: '已叫號',
   serving: '服務中',
   finished: '已完成',
   canceled: '已取消'
 };
+const STATUS_BADGE = {
+  waiting: 'badge-info',
+  called: 'badge-warning',
+  serving: 'badge-brand',
+  finished: 'badge-success',
+  canceled: ''
+};
 function statusLabel(s) { return STATUS_LABEL[s] || (s || '-'); }
 function isActiveStatus(s) { return s === 'called' || s === 'serving'; }
-function renderInfo(ticket) {
+function isOpenStatus(s) { return s === 'waiting' || isActiveStatus(s); }
+function showState(title, detail) {
   const infoWrap = document.querySelector('#info');
-  if (!infoWrap) return;
   infoWrap.textContent = '';
-  const pNum = document.createElement('p'); pNum.textContent = '號碼：'; const strong = document.createElement('strong'); strong.textContent = String(ticket.number || ''); pNum.appendChild(strong); infoWrap.appendChild(pNum);
-  const pStatus = document.createElement('p'); pStatus.textContent = '狀態：' + statusLabel(ticket.status); infoWrap.appendChild(pStatus);
-  const pCounter = document.createElement('p'); pCounter.textContent = '櫃台：' + String(ticket.counter || '-'); infoWrap.appendChild(pCounter);
-  const pCreated = document.createElement('p'); pCreated.textContent = '建立：' + new Date(ticket.createdAt).toLocaleString(); infoWrap.appendChild(pCreated);
+  const strong = document.createElement('strong');
+  strong.textContent = title;
+  infoWrap.appendChild(strong);
+  if (detail) {
+    const p = document.createElement('p');
+    p.textContent = detail;
+    infoWrap.appendChild(p);
+  }
+  infoWrap.classList.remove('hidden');
+  document.querySelector('#ticketCard').classList.add('hidden');
+  document.querySelector('#progress').classList.add('hidden');
+  document.querySelector('#notifyBar').classList.add('hidden');
+}
+function renderInfo(ticket) {
+  document.querySelector('#info').classList.add('hidden');
+  document.querySelector('#ticketCard').classList.remove('hidden');
+  document.querySelector('#progress').classList.remove('hidden');
+  document.querySelector('#notifyBar').classList.toggle('hidden', !isOpenStatus(ticket.status));
+  document.querySelector('#ticketNumber').textContent = String(ticket.number || '');
+  const badge = document.querySelector('#ticketStatus');
+  badge.className = `badge status ${STATUS_BADGE[ticket.status] || ''}`.trim();
+  badge.textContent = statusLabel(ticket.status);
+  const callout = document.querySelector('#ticketCallout');
+  const showCallout = ticket.status === 'called' && ticket.counter;
+  callout.classList.toggle('hidden', !showCallout);
+  callout.textContent = showCallout ? `輪到您了，請前往櫃台 ${ticket.counter}` : '';
+  document.querySelector('#ticketCounter').textContent = String(ticket.counter || '-');
+  document.querySelector('#ticketCreated').textContent = new Date(ticket.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 function scheduleRetry(res) {
   const retryAfterSec = Number(res.headers.get('Retry-After'));
@@ -116,26 +142,18 @@ function signatureOf(overview) {
   return 'closed';
 }
 function renderProgress() {
-  const progressEl = document.querySelector('#progress');
-  progressEl.textContent = '';
   if (!ticket || !latestOverview) return;
   const latest = latestOverview.currentCalls.find(c => c.serviceType === ticket.serviceType);
-  const pNow = document.createElement('p');
-  pNow.textContent = '目前叫號：' + (latest ? `${latest.number}${latest.counter ? `（${latest.counter}櫃台）` : ''}` : '-');
-  progressEl.appendChild(pNow);
+  document.querySelector('#currentCall').textContent = latest ? `${latest.number}${latest.counter ? `（櫃台 ${latest.counter}）` : ''}` : '-';
   const queue = latestOverview.waiting[ticket.serviceType];
   const ahead = ticket.status === 'waiting' && queue ? queue.findIndex(t => String(t.id) === id) : -1;
-  if (ahead >= 0) {
-    const pAhead = document.createElement('p');
-    pAhead.textContent = `前面尚有：${ahead} 位`;
-    progressEl.appendChild(pAhead);
-  }
+  document.querySelector('#aheadRow').classList.toggle('hidden', ahead < 0);
+  document.querySelector('#aheadCount').textContent = ahead >= 0 ? String(ahead) : '';
 }
 async function loadOnce() {
   const res = await fetch(`/api/ticket/${id}`);
   if (res.status === 404) {
-    document.querySelector('#info').textContent = '票券不存在';
-    document.querySelector('#progress').textContent = '';
+    showState('找不到這張票券', '請確認網址是否完整，或重新掃描取號時的 QR Code。');
     return;
   }
   if (!res.ok) {
@@ -161,7 +179,7 @@ function applyOverview(overview) {
 async function init() {
   setupNotifyUI();
   if (!id) {
-    document.querySelector('#info').textContent = '缺少票券 ID';
+    showState('網址缺少票券編號', '請重新掃描取號時的 QR Code。');
     return;
   }
   socket.on('queue:update', (payload) => applyOverview(payload.overview));
