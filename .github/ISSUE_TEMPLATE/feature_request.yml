@@ -1,0 +1,40 @@
+name: 功能建議
+description: 想要新增或調整功能
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 想解決什麼問題
+      description: 描述你遇到的情境，而不只是想要的功能
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 期望的做法
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 考慮過的替代方案
+  - type: dropdown
+    id: scope
+    attributes:
+      label: 會影響哪些部分
+      multiple: true
+      options:
+        - 前端畫面
+        - REST API
+        - 資料庫結構
+        - 環境變數
+        - 文件
+    validations:
+      required: true
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: 參與
+      options:
+        - label: 我願意提交 Pull Request

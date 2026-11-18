@@ -164,6 +164,9 @@ bun run dev
 | [API 參考](docs/api.md) | REST API、WebSocket 事件、錯誤碼與速率限制 |
 | [系統架構](docs/architecture.md) | 元件關係、叫號流程、票券狀態、資料庫結構、目錄說明 |
 | [部署指南](docs/deployment.md) | 上線檢查、Nginx、PM2 與疑難排解 |
+| [貢獻指南](CONTRIBUTING.md) | 開發環境、規範與 Pull Request 流程 |
+| [行為準則](CODE_OF_CONDUCT.md) | 社群互動的標準 |
+| [無障礙聲明](ACCESSIBILITY.md) | 目前支援的項目、已知限制與回報方式 |
 | [安全性](SECURITY.md) | 防護機制與漏洞回報方式 |
 | [更新紀錄](CHANGELOG.md) | 各版本的變更與升級須知 |
 

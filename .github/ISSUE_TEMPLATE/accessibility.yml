@@ -1,0 +1,31 @@
+name: 無障礙問題
+description: 在使用上遇到障礙
+labels: [accessibility]
+body:
+  - type: markdown
+    attributes:
+      value: 請參考 [無障礙聲明](https://github.com/Scorpio-meow/CallMiao/blob/main/ACCESSIBILITY.md) 了解目前的支援範圍與已知限制。
+  - type: input
+    id: page
+    attributes:
+      label: 發生在哪一頁、哪個操作
+    validations:
+      required: true
+  - type: textarea
+    id: barrier
+    attributes:
+      label: 遇到的障礙
+      description: 預期的行為與實際遇到的狀況
+    validations:
+      required: true
+  - type: input
+    id: tech
+    attributes:
+      label: 瀏覽器、作業系統與輔助科技
+      placeholder: Safari 18、iOS 18、VoiceOver
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: 建議的改善方式

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 回報安全漏洞
+    url: https://github.com/Scorpio-meow/CallMiao/security/advisories/new
+    about: 請私下回報，不要開公開 Issue
+  - name: 閱讀文件
+    url: https://github.com/Scorpio-meow/CallMiao#文件導覽
+    about: 設定、API、架構與部署的說明

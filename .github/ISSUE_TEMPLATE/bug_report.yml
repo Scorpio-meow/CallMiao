@@ -1,0 +1,68 @@
+name: 回報錯誤
+description: 行為與文件不符，或發生錯誤
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        請不要貼上 `.env` 的內容、`SESSION_SECRET` 或任何帳號密碼。安全漏洞請改用 [私下回報](https://github.com/Scorpio-meow/CallMiao/security/advisories/new)。
+  - type: textarea
+    id: summary
+    attributes:
+      label: 發生了什麼事
+      description: 簡短描述問題，以及你原本預期的結果
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 重現步驟
+      placeholder: |
+        1. 開啟 /agent/
+        2. 按下「叫下一號」
+        3. 看到錯誤
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: package.json 的 version，或 commit 編號
+      placeholder: 2.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: 執行環境
+      options:
+        - Bun
+        - Node.js 22 以上
+    validations:
+      required: true
+  - type: dropdown
+    id: page
+    attributes:
+      label: 發生在哪個頁面
+      multiple: true
+      options:
+        - 取號機 /kiosk/
+        - 櫃員工作台 /agent/
+        - 大廳看板 /lobby/
+        - 手機票券頁 /ticket/
+        - 管理後台 /admin/
+        - 登入頁 /login/
+        - 伺服器或 API
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: 作業系統與瀏覽器
+      placeholder: Windows 11、Chrome 130
+  - type: textarea
+    id: logs
+    attributes:
+      label: 錯誤訊息或日誌
+      description: 伺服器輸出或瀏覽器主控台的訊息，貼上前請移除機密資訊
+      render: text
